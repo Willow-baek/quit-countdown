@@ -1,6 +1,6 @@
 # Clinical Memory Assistant MVP
 
-물리치료 개인 임상 기억 보조 시스템의 첫 정적 프로토타입입니다. 현재 버전은 서버 없이 브라우저 `localStorage`에 저장되며, 나중에 Supabase, Whisper Memos iCloud export, OCR/API를 연결할 수 있도록 화면과 데이터 흐름을 먼저 잡아둔 상태입니다.
+물리치료 개인 임상 기억 보조 시스템의 첫 정적 프로토타입입니다. 현재 버전은 브라우저에서 바로 실행되는 정적 앱이며, 로컬 저장과 Supabase 클라우드 스냅샷 저장을 함께 사용합니다.
 
 ## 실행
 
@@ -20,6 +20,7 @@ python3 -m http.server 4173
 - Whisper transcript 붙여넣기 또는 `.txt` 업로드
 - 스케줄 캡쳐 OCR 텍스트 반영
 - 의사 초진 차트 캡쳐 정보 저장
+- GitHub Pages 배포 후 병원 Windows PC에서 스크린샷 붙여넣기
 - 녹음 시간과 스케줄 시간 기반 자동 매칭 후보
 - 환자 자동 생성
 - 방문 기록 생성
@@ -30,7 +31,7 @@ python3 -m http.server 4173
 
 ## 다음 연결 지점
 
-- Supabase 테이블 연결: `patients`, `visits`, `raw_inbox`, `schedule_items`, `terms`
+- Supabase 개별 테이블 동기화 고도화: `patients`, `visits`, `raw_inbox`, `schedule_items`, `terms`
 - MacBook watcher: Whisper Memos iCloud transcript 폴더 감시 후 `raw_inbox` 업로드
 - OCR: 스케줄/의사 차트 캡쳐 이미지에서 텍스트 추출
 - AI API: transcript에서 signal, hypothesis, progression, chart draft 생성
