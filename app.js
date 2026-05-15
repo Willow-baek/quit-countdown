@@ -1,5 +1,6 @@
 const STORAGE_KEY = "clinical-memory-assistant-v1";
 const SUPABASE_SESSION_KEY = "clinical-memory-supabase-session-v1";
+const LAST_CLOUD_SNAPSHOT_KEY = "clinical-memory-last-cloud-snapshot-at";
 const LOCAL_CONFIG = window.CMA_CONFIG || {};
 const DEFAULT_SUPABASE_URL = LOCAL_CONFIG.supabaseUrl || "https://mwwbqzdpnvnrvcdfxflh.supabase.co";
 const DEFAULT_SUPABASE_ANON_KEY = LOCAL_CONFIG.supabaseAnonKey || "";
@@ -90,6 +91,13 @@ const SEED_STATE = {
 
 let state = loadState();
 let supabaseSession = loadSupabaseSession();
+let lastCloudSnapshotAt = localStorage.getItem(LAST_CLOUD_SNAPSHOT_KEY) || "";
+let autoSyncTimer = null;
+let syncStatus = {
+  state: supabaseSession?.access_token ? "ready" : "local",
+  message: supabaseSession?.access_token ? "클라우드 연결됨" : "Supabase 로그인 필요",
+  lastAt: lastCloudSnapshotAt,
+};
 let currentView = "dashboard";
 let selectedPatientId = state.patients[0]?.id || null;
 let selectedVisitId = null;
@@ -171,8 +179,9 @@ function ensureStateShape(loaded) {
   return next;
 }
 
-function saveState() {
+function saveState(options = {}) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  if (!options.skipAutoSync) scheduleAutoCloudSave();
 }
 
 function loadSupabaseSession() {
@@ -189,9 +198,67 @@ function saveSupabaseSession(session) {
   supabaseSession = session;
   if (session) {
     localStorage.setItem(SUPABASE_SESSION_KEY, JSON.stringify(session));
+    setSyncStatus("ready", `로그인됨 ${session.user?.email || "user"}`);
   } else {
     localStorage.removeItem(SUPABASE_SESSION_KEY);
+    setSyncStatus("local", "Supabase 로그인 필요");
   }
+}
+
+function scheduleAutoCloudSave() {
+  if (!supabaseSession?.access_token) return;
+  window.clearTimeout(autoSyncTimer);
+  setSyncStatus("pending", "자동 저장 대기");
+  autoSyncTimer = window.setTimeout(() => {
+    uploadSupabaseSnapshot({ silent: true, labelPrefix: "auto" });
+  }, 1400);
+}
+
+function setSyncStatus(stateName, message, lastAt = syncStatus?.lastAt || lastCloudSnapshotAt) {
+  syncStatus = {
+    state: stateName,
+    message,
+    lastAt,
+  };
+  renderSyncStatus();
+}
+
+function rememberCloudSnapshotAt(createdAt) {
+  if (!createdAt) return;
+  lastCloudSnapshotAt = createdAt;
+  localStorage.setItem(LAST_CLOUD_SNAPSHOT_KEY, createdAt);
+}
+
+function renderSyncStatus() {
+  const dot = document.getElementById("syncStatusDot");
+  const mode = document.getElementById("syncModeLabel");
+  const detail = document.getElementById("syncDetailLabel");
+  if (!dot || !mode || !detail) return;
+
+  const signedIn = Boolean(supabaseSession?.access_token);
+  const stateName = signedIn ? syncStatus.state || "ready" : "local";
+  dot.className = `status-dot ${stateName}`;
+  mode.textContent = signedIn ? "Cloud sync" : "Local mode";
+  detail.textContent = signedIn ? syncStatus.message || "클라우드 연결됨" : "Supabase 로그인 필요";
+}
+
+function isEditingDataField() {
+  const active = document.activeElement;
+  return Boolean(
+    active?.matches?.("input, textarea, select") &&
+      !active.closest(".topbar-actions") &&
+      !active.closest(".nav"),
+  );
+}
+
+function formatSyncClock(isoString) {
+  if (!isoString) return "";
+  const date = new Date(isoString);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleTimeString("ko-KR", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 function getSupabaseConfig() {
@@ -212,7 +279,7 @@ function setView(view) {
 
   const copy = {
     dashboard: ["오늘", "스케줄, 녹음, 차트 초안을 한 번에 확인합니다."],
-    inbox: ["Import Inbox", "녹음 전사, 스케줄 캡쳐, 의사 차트 캡쳐를 처리합니다."],
+    inbox: ["Import Inbox", "스케줄 후보, 녹음 전사, 의사 차트 캡쳐를 확인합니다."],
     patients: ["환자", "환자 코드와 추적 변수를 관리합니다."],
     visits: ["방문 기록", "재진 브리핑과 차트 초안을 편집합니다."],
     terms: ["용어 사전", "한국어 전사 오류와 임상 표현을 보정합니다."],
@@ -410,25 +477,66 @@ function parseScheduleText(text, date, sourceFile = "manual paste") {
 }
 
 function parseSmartCrmScheduleText(text, date, therapistName = "백한솔", sourceFile = "smart crm paste") {
-  const normalizedText = normalizeSmartCrmOcrText(text || "");
-  const listItems = parseSmartCrmListText(normalizedText, date, therapistName, sourceFile);
-  if (listItems.length) return dedupeScheduleItems(listItems);
+  const candidates = parseSmartCrmScheduleCandidates(text, date, therapistName, sourceFile);
+  return candidates
+    .filter((candidate) => !candidate.needsReview)
+    .map(scheduleCandidateToItem);
+}
 
-  const normalized = normalizedText
+function parseSmartCrmScheduleCandidates(text, date, therapistName = "백한솔", sourceFile = "smart crm paste") {
+  const normalizedText = normalizeSmartCrmOcrText(text || "");
+  const lines = normalizedText
     .replace(/\r/g, "\n")
-    .replace(/[|]+/g, " ")
     .split(/\n+/)
     .map((line) => line.trim())
     .filter(Boolean);
 
-  const therapistLines = normalized.filter((line) => {
-    return !therapistName || line.includes(therapistName);
-  });
-  const lines = therapistLines.length ? therapistLines : normalized;
-
-  return lines
-    .flatMap((line) => extractScheduleItemsFromLine(line, date, therapistName, sourceFile))
+  const segments = splitSmartCrmAppointmentSegments(lines.join("\n"));
+  return segments
+    .map((segment) => parseSmartCrmScheduleCandidate(segment, date, therapistName, sourceFile))
     .filter(Boolean);
+}
+
+function parseSmartCrmScheduleCandidate(segment, date, therapistName, sourceFile) {
+  const time = normalizeKoreanTime(segment.timeText);
+  if (!time) return null;
+
+  const patientName = inferSmartCrmPatientName(segment.text, therapistName);
+  const treatment = extractSmartCrmTreatment(segment.text);
+  const reviewReasons = [];
+  if (!patientName) reviewReasons.push("환자명");
+  if (!treatment.minutes) reviewReasons.push("치료시간");
+
+  return {
+    id: uid("schedcand"),
+    type: "schedule_candidate",
+    fileName: "schedule candidate",
+    createdAt: new Date().toISOString(),
+    recordedDate: date,
+    recordedTime: time,
+    patientHint: patientName,
+    durationMinutes: treatment.minutes || "",
+    sourceFile,
+    status: "new",
+    needsReview: reviewReasons.length > 0,
+    reviewReason: reviewReasons.join(", "),
+  };
+}
+
+function scheduleCandidateToItem(candidate) {
+  return {
+    id: uid("sch"),
+    date: candidate.recordedDate || todayISO(),
+    time: candidate.recordedTime,
+    patientName: candidate.patientHint,
+    patientCode: "",
+    visitType: "재진",
+    note: candidate.durationMinutes ? `${candidate.durationMinutes}분` : "",
+    durationMinutes: candidate.durationMinutes || "",
+    sourceFile: candidate.sourceFile || "schedule candidate",
+    matchedVisitId: null,
+    status: "scheduled",
+  };
 }
 
 function normalizeSmartCrmOcrText(text) {
@@ -442,114 +550,12 @@ function normalizeSmartCrmOcrText(text) {
     .replace(/[：]/g, ":")
     .replace(/[|]+/g, " ")
     .replace(/\t/g, " ")
+    .replace(/\b([01]\d|2[0-3])[25]([0-5]\d)\b/g, "$1:$2")
+    .replace(/\b([01]\d|2[0-3])([0-5]\d)\b/g, "$1:$2")
+    .replace(/\b([1-9])([0-5]\d)\b/g, "0$1:$2")
     .replace(/([0O]?\d|1\d|2[0-3])\s*[:시=.ㆍ·-]\s*([0-5O]\d|[0-5O])/g, (full, hour, minute) => {
       return `${hour.replace(/[Oo]/g, "0")}:${minute.replace(/[Oo]/g, "0").padStart(2, "0")}`;
     });
-}
-
-function parseSmartCrmListText(text, defaultDate, therapistName, sourceFile) {
-  const lines = text
-    .split(/\n+/)
-    .map((line) => line.replace(/\s+/g, " ").trim())
-    .filter(Boolean);
-  if (!lines.length) return [];
-
-  const blocks = splitSmartCrmCalendarBlocks(lines, defaultDate);
-  const items = blocks.flatMap((block) => {
-    return splitSmartCrmAppointmentSegments(block.text).map((segment) => {
-      const time = normalizeKoreanTime(segment.timeText);
-      if (!time) return null;
-
-      const patientName = inferSmartCrmPatientName(segment.text, therapistName);
-      if (!patientName) return null;
-
-      const smartCrmStatus = inferSmartCrmStatus(segment.text);
-      if (smartCrmStatus === "cancelled") return null;
-
-      const visitType = smartCrmStatus === "new" || /초진|신규|new/i.test(segment.text) ? "초진" : "재진";
-      const note = cleanSmartCrmScheduleNote(segment.text, segment.timeText, patientName);
-      return {
-        id: uid("sch"),
-        date: block.date || defaultDate,
-        time,
-        patientName,
-        patientCode: "",
-        visitType,
-        note,
-        sourceFile,
-        matchedVisitId: null,
-        status: smartCrmStatus === "completed" ? "completed" : "scheduled",
-      };
-    });
-  }).filter(Boolean);
-
-  const therapistMatches = items.filter((item) => {
-    return therapistName && item.note.includes(therapistName);
-  });
-  return therapistMatches.length ? therapistMatches : items;
-}
-
-function splitSmartCrmCalendarBlocks(lines, defaultDate) {
-  const blocks = [];
-  let currentDate = defaultDate;
-  let currentLines = [];
-
-  const flush = () => {
-    if (!currentLines.length) return;
-    blocks.push({
-      date: currentDate,
-      text: currentLines.join("\n"),
-    });
-    currentLines = [];
-  };
-
-  lines.forEach((line) => {
-    const dayHit = detectSmartCrmDayMarker(line, defaultDate);
-    if (dayHit) {
-      flush();
-      currentDate = dayHit.date;
-      if (dayHit.rest) currentLines.push(dayHit.rest);
-      return;
-    }
-    currentLines.push(line);
-  });
-  flush();
-
-  return blocks.length ? blocks : [{ date: defaultDate, text: lines.join("\n") }];
-}
-
-function detectSmartCrmDayMarker(line, defaultDate) {
-  const defaultParts = defaultDate.split("-").map(Number);
-  if (defaultParts.length !== 3 || defaultParts.some(Number.isNaN)) return null;
-  const [year, month] = defaultParts;
-
-  const trimmed = line.trim();
-  const compact = trimmed.replace(/\s+/g, "");
-  const dateMatch = compact.match(/(?:20\d{2})[-./년]?(0?\d{1,2})[-./월]?(0?\d{1,2})/);
-  if (dateMatch && !findSmartCrmTimeMatches(trimmed).length) {
-    return {
-      date: `${year}-${String(Number(dateMatch[1])).padStart(2, "0")}-${String(Number(dateMatch[2])).padStart(2, "0")}`,
-      rest: "",
-    };
-  }
-
-  const dayLine = trimmed.match(/^(?:Sun|Mon|Tue|Wed|Thu|Fri|Sat|일|월|화|수|목|금|토)?\s*(\d{1,2})(?:\s|일|$)(.*)$/i);
-  if (!dayLine) return null;
-  const day = Number(dayLine[1]);
-  const rest = (dayLine[2] || "").trim();
-  if (day < 1 || day > 31) return null;
-  if (findSmartCrmTimeMatches(rest).length && trimmed.length > 8) {
-    return {
-      date: `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`,
-      rest,
-    };
-  }
-  if (rest && /[가-힣A-Za-z]{2,}/.test(rest)) return null;
-  if (trimmed.length > 12) return null;
-  return {
-    date: `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`,
-    rest: "",
-  };
 }
 
 function splitSmartCrmAppointmentSegments(text) {
@@ -596,6 +602,17 @@ function inferSmartCrmPatientName(segment, therapistName) {
     "일일현황리스트",
   ]);
 
+  const directPatterns = [
+    /\]\s*([가-힣]{2,4})\s*(?:님|닝)?/,
+    /백한[솔술출][^\]가-힣]{0,8}\]?\s*([가-힣]{2,4})\s*(?:님|닝)?/,
+    /도수[^\]가-힣]{0,8}\]?\s*([가-힣]{2,4})\s*(?:님|닝)?/,
+  ];
+  for (const pattern of directPatterns) {
+    const hit = String(segment || "").match(pattern);
+    const candidate = hit?.[1]?.replace(/[님닝]+$/, "");
+    if (candidate && !stopWords.has(candidate) && /^[가-힣]{2,4}$/.test(candidate)) return candidate;
+  }
+
   const cleaned = String(segment || "")
     .replace(/(?:오전|오후)?\s*([0O]?\d|1\d|2[0-3])\s*[:시=.ㆍ·-]\s*([0-5O]\d|[0-5O])/g, " ")
     .replace(/\[[^\]]*]/g, " ")
@@ -618,72 +635,42 @@ function inferSmartCrmPatientName(segment, therapistName) {
   }) || "";
 }
 
-function cleanSmartCrmScheduleNote(segment, timeText, patientName) {
-  return String(segment || "")
-    .replace(timeText || "", "")
-    .replace(patientName || "", "")
-    .replace(/\[상태:[^\]]+]/g, "")
-    .replace(/\s+/g, " ")
-    .replace(/\s+([/\]])/g, "$1")
-    .trim();
+function extractSmartCrmTreatment(segment) {
+  const text = normalizeSmartCrmOcrText(segment || "")
+    .replace(/도[추주]/g, "도수")
+    .replace(/[E므][0-9]{1,3}/g, "")
+    .replace(/\s+/g, " ");
+  const bracketTexts = [...text.matchAll(/\[([^\]]+)]/g)].map((match) => match[1]).reverse();
+  const withoutTime = text.replace(/(?:오전|오후)?\s*([0O]?\d|1\d|2[0-3])\s*[:시=.ㆍ·-]\s*([0-5O]\d|[0-5O])/g, " ");
+  const candidates = [...bracketTexts, text, withoutTime];
+  const patterns = [
+    { pattern: /도수\s*치료\s*(\d{2,3})\s*분?/, prefix: "도수치료" },
+    { pattern: /도수\s*(\d{2,3})\s*분/, prefix: "도수" },
+    { pattern: /도수\s*(\d{2,3})\b/, prefix: "도수치료" },
+    { pattern: /운동\s*치료\s*(\d{2,3})\s*분?/, prefix: "운동치료" },
+    { pattern: /운동\s*(\d{2,3})\s*(?:패키지|치료|분)/, prefix: "운동치료" },
+    { pattern: /(?:^|\s)(\d{2,3})\s*분?(?:\s|$)/, prefix: "" },
+  ];
+
+  for (const candidate of candidates) {
+    for (const rule of patterns) {
+      const hit = candidate.match(rule.pattern);
+      const minutes = hit ? normalizeTreatmentMinutes(hit[1]) : "";
+      if (minutes) {
+        return {
+          minutes,
+          label: rule.prefix ? `${rule.prefix}${minutes}` : `${minutes}분`,
+        };
+      }
+    }
+  }
+  return { minutes: "", label: "" };
 }
 
-function inferSmartCrmStatus(segment) {
-  const value = String(segment || "");
-  if (/\[상태:\s*취소]|예약취소|취소/.test(value)) return "cancelled";
-  if (/\[상태:\s*신규]|초진|신규/.test(value)) return "new";
-  if (/\[상태:\s*완료]|방문|치료완료|내원/.test(value)) return "completed";
-  if (/\[상태:\s*예약]|정상예약/.test(value)) return "scheduled";
-  return "scheduled";
-}
-
-function dedupeScheduleItems(items) {
-  const seen = new Set();
-  return items.filter((item) => {
-    const key = `${item.date}|${item.time}|${item.patientName}|${item.note}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
-function extractScheduleItemsFromLine(line, date, therapistName, sourceFile) {
-  const items = [];
-  const timeMatches = findSmartCrmTimeMatches(line);
-  if (!timeMatches.length) return [];
-
-  timeMatches.forEach((match, index) => {
-    const nextMatch = timeMatches[index + 1];
-    const segment = line.slice(match.index, nextMatch?.index || line.length);
-    const time = normalizeKoreanTime(match[0]);
-    if (!time) return;
-
-    const visitType = /초진|신규|new/i.test(segment) ? "초진" : "재진";
-    const patientName = inferSchedulePatientName(segment, therapistName);
-    const note = segment
-      .replace(match[0], "")
-      .replace(therapistName || "", "")
-      .replace(patientName || "", "")
-      .replace(/초진|신규|재진|예약|치료|도수|물리치료|완료|내원|취소|대기/gi, "")
-      .replace(/\s+/g, " ")
-      .trim();
-
-    if (!patientName) return;
-    items.push({
-      id: uid("sch"),
-      date,
-      time,
-      patientName,
-      patientCode: "",
-      visitType,
-      note,
-      sourceFile,
-      matchedVisitId: null,
-      status: "scheduled",
-    });
-  });
-
-  return items;
+function normalizeTreatmentMinutes(value) {
+  const number = Number(String(value || "").replace(/\D/g, ""));
+  if (!Number.isFinite(number) || number < 10 || number > 180) return "";
+  return String(number);
 }
 
 function normalizeKoreanTime(value) {
@@ -698,18 +685,6 @@ function normalizeKoreanTime(value) {
   if (isPM && hour < 12) hour += 12;
   if (isAM && hour === 12) hour = 0;
   return `${String(hour).padStart(2, "0")}:${minute}`;
-}
-
-function inferSchedulePatientName(segment, therapistName) {
-  const cleaned = segment
-    .replace(/(?:오전|오후)?\s*\d{1,2}[:시=.ㆍ·-]\s?\d{0,2}/g, " ")
-    .replace(therapistName || "", " ")
-    .replace(/초진|신규|재진|예약|치료|도수|물리치료|완료|내원|취소|대기|남|여|\d+세|님|닝/gi, " ")
-    .replace(/[()[\]{}.,/\\|]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  const parts = cleaned.split(" ").filter(Boolean);
-  return parts.find((part) => /^[가-힣A-Za-z]{2,12}(?:OO|님|닝)?$/.test(part))?.replace(/[님닝]+$/, "") || "";
 }
 
 function parseTranscriptMeta(text, fileName, recordedDate, recordedTime) {
@@ -837,6 +812,69 @@ function createVisitFromInbox(inboxId, scheduleId = null) {
   setView("visits");
 }
 
+function readScheduleCandidateInputs(id) {
+  return {
+    time: normalizeKoreanTime(document.getElementById(`candidateTime-${id}`)?.value || ""),
+    patientName: document.getElementById(`candidateName-${id}`)?.value.trim() || "",
+    durationMinutes: normalizeTreatmentMinutes(document.getElementById(`candidateDuration-${id}`)?.value || ""),
+  };
+}
+
+function confirmScheduleCandidate(id) {
+  const candidate = state.rawInbox.find((entry) => entry.id === id && entry.type === "schedule_candidate");
+  if (!candidate) return;
+
+  const values = readScheduleCandidateInputs(id);
+  if (!values.time || !values.patientName || !values.durationMinutes) {
+    candidate.recordedTime = values.time || candidate.recordedTime;
+    candidate.patientHint = values.patientName || candidate.patientHint;
+    candidate.durationMinutes = values.durationMinutes || "";
+    candidate.needsReview = true;
+    candidate.reviewReason = [
+      !values.time ? "시간" : "",
+      !values.patientName ? "환자명" : "",
+      !values.durationMinutes ? "치료시간" : "",
+    ].filter(Boolean).join(", ");
+    saveState();
+    toast("시간, 환자명, 치료시간을 확인해 주세요.");
+    render();
+    return;
+  }
+
+  candidate.recordedTime = values.time;
+  candidate.patientHint = values.patientName;
+  candidate.durationMinutes = values.durationMinutes;
+
+  const scheduleItem = scheduleCandidateToItem(candidate);
+  state.scheduleItems = [
+    scheduleItem,
+    ...state.scheduleItems.filter((item) => {
+      return !(
+        item.date === scheduleItem.date &&
+        item.time === scheduleItem.time &&
+        item.sourceFile === scheduleItem.sourceFile
+      );
+    }),
+  ];
+  candidate.status = "imported";
+  candidate.needsReview = false;
+  candidate.matchedScheduleId = scheduleItem.id;
+  selectedScheduleId = scheduleItem.id;
+  dashboardWeekStart = getWeekStartISO(scheduleItem.date);
+  saveState();
+  toast(`${scheduleItem.time} ${scheduleItem.patientName} 스케줄을 반영했습니다.`);
+  render();
+}
+
+function discardScheduleCandidate(id) {
+  const candidate = state.rawInbox.find((entry) => entry.id === id && entry.type === "schedule_candidate");
+  if (!candidate) return;
+  candidate.status = "discarded";
+  saveState();
+  toast("스케줄 후보를 폐기했습니다.");
+  render();
+}
+
 function extractSignals(text) {
   const signals = [];
   const secondary = [];
@@ -931,6 +969,7 @@ function generateDraft(visit, patient) {
 }
 
 function render() {
+  renderSyncStatus();
   const query = document.getElementById("globalSearch").value.trim().toLowerCase();
   if (currentView === "dashboard") renderDashboard(query);
   if (currentView === "inbox") renderInbox();
@@ -1012,8 +1051,8 @@ function renderWorkflowImportLanes() {
 
 function renderImportLane(lane) {
   const isSchedule = lane.kind === "schedule";
-  const defaultStatus = isSchedule ? "Smart CRM · 여러 장 붙여넣기" : "초진 차트 · 후보 정리";
-  const placeholder = isSchedule ? "여러 장 붙여넣기" : "여기에 붙여넣기";
+  const defaultStatus = isSchedule ? "외부 비전 AI 정리 텍스트 붙여넣기" : "초진 차트 · 후보 정리";
+  const placeholder = isSchedule ? "텍스트 붙여넣기" : "여기에 붙여넣기";
   return `
     <article class="paste-lane" data-lane="${lane.key}" tabindex="0" aria-label="${escapeHTML(lane.title)} 붙여넣기">
       <div class="paste-lane-head">
@@ -1038,7 +1077,7 @@ function renderImportLane(lane) {
             ? `<div class="lane-image-preview"><img src="${lane.imagePreview}" alt="붙여넣은 이미지 미리보기" /><span>${escapeHTML(lane.imageName || "pasted image")}</span></div>`
             : `<div class="lane-placeholder">${escapeHTML(placeholder)}</div>`
         }
-        <textarea id="laneText-${lane.key}" placeholder="${isSchedule ? "OCR 텍스트 또는 스케줄 텍스트" : "OCR 텍스트 또는 초진 차트 텍스트"}">${escapeHTML(lane.text)}</textarea>
+        <textarea id="laneText-${lane.key}" placeholder="${isSchedule ? "예: 09:00 [도수(백한솔)] 김시완 [도수치료60]" : "OCR 텍스트 또는 초진 차트 텍스트"}">${escapeHTML(lane.text)}</textarea>
       </div>
 
       <div class="paste-lane-actions">
@@ -1196,6 +1235,8 @@ function renderScheduleItem(item) {
 }
 
 function renderInboxMatchCard(item) {
+  if (item.type === "schedule_candidate") return renderScheduleCandidateCard(item);
+
   const match = item.type === "transcript" ? findBestScheduleForInbox(item) : null;
   return `
     <article class="item">
@@ -1223,6 +1264,39 @@ function renderInboxMatchCard(item) {
   `;
 }
 
+function renderScheduleCandidateCard(item) {
+  const reason = item.needsReview ? item.reviewReason || "검토 필요" : "확인 후 반영";
+  return `
+    <article class="item">
+      <div class="item-top">
+        <div>
+          <h3>${escapeHTML(item.recordedTime || "시간 확인")} · ${escapeHTML(item.patientHint || "이름 확인")}</h3>
+          <div class="meta">${escapeHTML(item.recordedDate || todayISO())} · duration ${escapeHTML(item.durationMinutes || "?")}분</div>
+        </div>
+        <span class="badge ${item.needsReview ? "warn" : "follow"}">${escapeHTML(reason)}</span>
+      </div>
+      <div class="field-grid three">
+        <div class="field">
+          <label for="candidateTime-${item.id}">시간</label>
+          <input id="candidateTime-${item.id}" value="${escapeHTML(item.recordedTime || "")}" placeholder="09:00" />
+        </div>
+        <div class="field">
+          <label for="candidateName-${item.id}">환자명</label>
+          <input id="candidateName-${item.id}" value="${escapeHTML(item.patientHint || "")}" placeholder="김OO" />
+        </div>
+        <div class="field">
+          <label for="candidateDuration-${item.id}">치료시간</label>
+          <input id="candidateDuration-${item.id}" value="${escapeHTML(item.durationMinutes || "")}" placeholder="60" />
+        </div>
+      </div>
+      <div class="split-actions">
+        <button class="ghost-button" data-action="discard-schedule-candidate" data-id="${item.id}">폐기</button>
+        <button class="primary-button" data-action="confirm-schedule-candidate" data-id="${item.id}">스케줄 반영</button>
+      </div>
+    </article>
+  `;
+}
+
 function renderInbox() {
   const container = document.getElementById("inboxView");
   const newItems = state.rawInbox.filter((item) => item.status === "new");
@@ -1238,7 +1312,7 @@ function renderInbox() {
         </div>
         <div class="panel-body">
           <div class="list compact-list">
-            ${newItems.length ? newItems.map(renderInboxMatchCard).join("") : emptyState("대기 항목 없음", "Whisper transcript나 초진 차트가 여기에 쌓입니다.")}
+            ${newItems.length ? newItems.map(renderInboxMatchCard).join("") : emptyState("대기 항목 없음", "스케줄 후보, Whisper transcript, 초진 차트가 여기에 쌓입니다.")}
           </div>
         </div>
       </section>
@@ -1791,6 +1865,8 @@ function attachEvents() {
       render();
     }
     if (action === "create-visit") createVisitFromInbox(id, target.dataset.schedule || null);
+    if (action === "confirm-schedule-candidate") confirmScheduleCandidate(id);
+    if (action === "discard-schedule-candidate") discardScheduleCandidate(id);
     if (action === "preview-inbox") {
       const item = state.rawInbox.find((entry) => entry.id === id);
       if (item) {
@@ -1917,6 +1993,7 @@ async function handleImportLanePaste(event) {
   if (!clipboard) return;
 
   let changed = false;
+  let shouldRunOcr = false;
   const text = clipboard.getData("text/plain");
   if (text) {
     updateImportLaneFromDOM(laneKey);
@@ -1928,21 +2005,28 @@ async function handleImportLanePaste(event) {
   if (imageItem) {
     const file = imageItem.getAsFile();
     if (file) {
-      const preview = await fileToDataURL(file);
       updateImportLaneFromDOM(laneKey);
-      lane.imageName = file.name || `pasted-${new Date().toISOString()}.png`;
-      lane.imagePreview = preview;
-      lane.screenshotCount = (lane.screenshotCount || 0) + 1;
-      lane.ocrStatus = "OCR 읽는 중...";
+      if (lane.kind === "schedule") {
+        lane.imageName = "";
+        lane.imagePreview = "";
+        lane.ocrStatus = "스케줄 이미지는 외부 비전 AI로 정리한 텍스트를 붙여넣어 주세요.";
+      } else {
+        const preview = await fileToDataURL(file);
+        lane.imageName = file.name || `pasted-${new Date().toISOString()}.png`;
+        lane.imagePreview = preview;
+        lane.screenshotCount = (lane.screenshotCount || 0) + 1;
+        lane.ocrStatus = "OCR 읽는 중...";
+        shouldRunOcr = true;
+      }
       changed = true;
     }
   }
 
   if (changed) {
     event.preventDefault();
-    toast(imageItem ? "이미지를 읽고 있습니다." : "붙여넣었습니다. 텍스트가 있으면 바로 반영할 수 있습니다.");
+    toast(shouldRunOcr ? "이미지를 읽고 있습니다." : "붙여넣었습니다. 텍스트가 있으면 후보를 만들 수 있습니다.");
     render();
-    if (imageItem) await runLaneOcr(laneKey);
+    if (shouldRunOcr) await runLaneOcr(laneKey);
   }
 }
 
@@ -1965,37 +2049,25 @@ async function runLaneOcr(laneKey) {
     render();
     return;
   }
+  if (lane.kind === "schedule") {
+    lane.ocrStatus = "스케줄 이미지는 외부 비전 AI로 정리한 텍스트를 붙여넣어 주세요.";
+    lane.imageName = "";
+    lane.imagePreview = "";
+    render();
+    return;
+  }
 
   try {
-    const ocrSource = await prepareLaneOcrSource(lane);
-    const result = await window.Tesseract.recognize(ocrSource.src, "kor+eng", {
-      logger: (message) => {
-        if (message.status === "recognizing text" && typeof message.progress === "number") {
-          lane.ocrStatus = `OCR ${Math.round(message.progress * 100)}%`;
-          render();
-        }
-      },
+    const text = await recognizeGenericLaneImage(lane, (status) => {
+      lane.ocrStatus = status;
+      render();
     });
-    const rawText = result?.data?.text?.trim() || "";
-    const text =
-      lane.kind === "schedule"
-        ? (await buildSmartCrmTaggedOcrText(lane.imagePreview, result?.data, ocrSource.scale)) || rawText
-        : lane.kind === "doctor_chart"
-          ? await buildDoctorChartReviewText(lane.imagePreview, result?.data, rawText)
-          : rawText;
     if (!text) {
       lane.ocrStatus = "OCR 결과 없음. 텍스트를 붙여넣어 주세요.";
       render();
       return;
     }
     lane.text = [lane.text, text].filter(Boolean).join("\n").trim();
-    if (lane.kind === "schedule") {
-      lane.imageName = "";
-      lane.imagePreview = "";
-      lane.ocrStatus = `OCR ${lane.screenshotCount || 1}장 누적 · 더 붙여넣거나 반영`;
-      render();
-      return;
-    }
     if (lane.kind === "doctor_chart") {
       lane.ocrStatus = "OCR 후보 정리 완료 · 확인 후 반영";
       render();
@@ -2011,76 +2083,24 @@ async function runLaneOcr(laneKey) {
   }
 }
 
+async function recognizeGenericLaneImage(lane, updateStatus) {
+  const ocrSource = await prepareLaneOcrSource(lane);
+  const result = await window.Tesseract.recognize(ocrSource.src, "kor+eng", {
+    logger: (message) => {
+      if (message.status === "recognizing text" && typeof message.progress === "number") {
+        updateStatus(`OCR ${Math.round(message.progress * 100)}%`);
+      }
+    },
+  });
+  const rawText = result?.data?.text?.trim() || "";
+  if (lane.kind === "doctor_chart") {
+    return buildDoctorChartReviewText(lane.imagePreview, result?.data, rawText);
+  }
+  return rawText;
+}
+
 async function prepareLaneOcrSource(lane) {
-  if (lane.kind === "schedule") {
-    return preprocessScheduleImageForOcr(lane.imagePreview);
-  }
   return { src: lane.imagePreview, scale: 1 };
-}
-
-async function preprocessScheduleImageForOcr(imageSrc) {
-  if (!imageSrc) return { src: imageSrc, scale: 1 };
-
-  try {
-    const image = await loadImageElement(imageSrc);
-    const scale = 2.4;
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.round((image.naturalWidth || image.width) * scale);
-    canvas.height = Math.round((image.naturalHeight || image.height) * scale);
-    const context = canvas.getContext("2d", { willReadFrequently: true });
-    if (!context) return { src: imageSrc, scale: 1 };
-    context.imageSmoothingEnabled = false;
-    context.drawImage(image, 0, 0, canvas.width, canvas.height);
-
-    const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
-    const data = imageData.data;
-    for (let index = 0; index < data.length; index += 4) {
-      const red = data[index];
-      const green = data[index + 1];
-      const blue = data[index + 2];
-      const gray = red * 0.299 + green * 0.587 + blue * 0.114;
-      const max = Math.max(red, green, blue);
-      const min = Math.min(red, green, blue);
-      const contrast = max - min;
-      const isText = gray < 128 || (gray < 170 && contrast < 45);
-      const value = isText ? 0 : 255;
-      data[index] = value;
-      data[index + 1] = value;
-      data[index + 2] = value;
-      data[index + 3] = 255;
-    }
-    context.putImageData(imageData, 0, 0);
-    return { src: canvas.toDataURL("image/png"), scale };
-  } catch {
-    return { src: imageSrc, scale: 1 };
-  }
-}
-
-async function buildSmartCrmTaggedOcrText(imageSrc, ocrData, ocrScale = 1) {
-  const lines = collectOcrLines(ocrData);
-  if (!imageSrc || !lines.length) return "";
-
-  try {
-    const image = await loadImageElement(imageSrc);
-    const canvas = document.createElement("canvas");
-    canvas.width = image.naturalWidth || image.width;
-    canvas.height = image.naturalHeight || image.height;
-    const context = canvas.getContext("2d", { willReadFrequently: true });
-    if (!context) return "";
-    context.drawImage(image, 0, 0, canvas.width, canvas.height);
-
-    return lines
-      .map((line) => {
-        const text = line.text.trim();
-        if (!text) return "";
-        const status = classifySmartCrmLineStatus(context, line, ocrScale);
-        return status ? `${text} [상태:${status}]` : text;
-      })
-      .filter(Boolean)
-      .join("\n");
-  } catch {
-    return "";
-  }
 }
 
 function collectOcrLines(ocrData) {
@@ -2190,70 +2210,6 @@ function centerOfBox(box) {
     x: (box.x0 + box.x1) / 2,
     y: (box.y0 + box.y1) / 2,
   };
-}
-
-function classifySmartCrmLineStatus(context, line, ocrScale = 1) {
-  const timeWord = (line.words || []).find((word) => findSmartCrmTimeMatches(getOcrEntityText(word)).length);
-  if (!timeWord) return "";
-  const box = scaleOcrBox(normalizeOcrBbox(timeWord.bbox || line.bbox), 1 / (ocrScale || 1));
-  const color = sampleSmartCrmBackground(context, box);
-  return classifySmartCrmColor(color);
-}
-
-function scaleOcrBox(box, factor) {
-  return {
-    x0: box.x0 * factor,
-    y0: box.y0 * factor,
-    x1: box.x1 * factor,
-    y1: box.y1 * factor,
-  };
-}
-
-function sampleSmartCrmBackground(context, box) {
-  const canvas = context.canvas;
-  const x0 = Math.max(0, Math.floor(box.x0 - 10));
-  const y0 = Math.max(0, Math.floor(box.y0 - 6));
-  const x1 = Math.min(canvas.width, Math.ceil(box.x1 + 80));
-  const y1 = Math.min(canvas.height, Math.ceil(box.y1 + 8));
-  const width = Math.max(1, x1 - x0);
-  const height = Math.max(1, y1 - y0);
-  const pixels = context.getImageData(x0, y0, width, height).data;
-  let r = 0;
-  let g = 0;
-  let b = 0;
-  let count = 0;
-
-  for (let index = 0; index < pixels.length; index += 4) {
-    const red = pixels[index];
-    const green = pixels[index + 1];
-    const blue = pixels[index + 2];
-    const max = Math.max(red, green, blue);
-    const min = Math.min(red, green, blue);
-    const brightness = (red + green + blue) / 3;
-    const saturation = max ? (max - min) / max : 0;
-    if (brightness < 80 || brightness > 248 || saturation < 0.08) continue;
-    r += red;
-    g += green;
-    b += blue;
-    count += 1;
-  }
-
-  if (!count) return null;
-  return {
-    r: r / count,
-    g: g / count,
-    b: b / count,
-  };
-}
-
-function classifySmartCrmColor(color) {
-  if (!color) return "";
-  const { r, g, b } = color;
-  if (r > 190 && g > 165 && b < 165) return "신규";
-  if (g > r + 25 && g > b + 15) return "예약";
-  if (b > r + 18 && b > g + 8) return "완료";
-  if (r > g + 25 && r > b + 8) return "취소";
-  return "";
 }
 
 function loadImageElement(src) {
@@ -2510,42 +2466,40 @@ function processImportLane(laneKey, options = {}) {
 
   if (lane.kind === "schedule") {
     const sourceFile = lane.sourceFile;
-    const items = parseSmartCrmScheduleText(
+    const candidates = parseSmartCrmScheduleCandidates(
       lane.text,
       lane.date,
       lane.therapist,
       sourceFile,
     );
 
-    if (!items.length) {
+    if (!candidates.length) {
       toast(
         lane.imagePreview
           ? "OCR은 끝났지만 스케줄 시간/환자명을 읽지 못했습니다. 텍스트를 확인해 주세요."
-          : "스케줄로 읽을 수 있는 시간/환자명이 없습니다.",
+          : "스케줄 후보로 읽을 수 있는 시간이 없습니다.",
       );
       lane.ocrStatus = "반영 실패, 텍스트 확인 필요";
       render();
       return;
     }
 
-    const parsedDates = new Set(items.map((item) => item.date || lane.date));
-    state.scheduleItems = [
-      ...items,
-      ...state.scheduleItems.filter((item) => {
-        const managedSource = ["smart crm paste", "smart crm quick import", sourceFile].includes(item.sourceFile);
-        return !parsedDates.has(item.date) || !managedSource;
+    state.rawInbox = [
+      ...candidates,
+      ...state.rawInbox.filter((item) => {
+        return !(item.type === "schedule_candidate" && item.recordedDate === lane.date && item.sourceFile === sourceFile);
       }),
     ];
-    dashboardWeekStart = getWeekStartISO(items[0]?.date || lane.date);
-    selectedScheduleId = items[0]?.id || selectedScheduleId;
+    dashboardWeekStart = getWeekStartISO(lane.date);
     lane.text = "";
     lane.imageName = "";
     lane.imagePreview = "";
     lane.screenshotCount = 0;
-    lane.ocrStatus = auto ? "OCR 자동 반영 완료" : "";
+    lane.ocrStatus = "";
     saveState();
-    toast(`${lane.title}: ${items.length}개 예약을 반영했습니다.`);
-    render();
+    toast(`${lane.title}: 스케줄 후보 ${candidates.length}개를 Inbox에 만들었습니다.`);
+    if (currentView !== "inbox") setView("inbox");
+    else render();
     return;
   }
 
@@ -2819,6 +2773,7 @@ async function handleSupabaseLogin(form) {
     saveSupabaseSession(normalizeSupabaseSession(data));
     toast("Supabase에 로그인했습니다.");
     render();
+    downloadLatestSupabaseSnapshot({ silent: true, onlyIfNewer: true });
   } catch (error) {
     toast(`로그인 실패: ${error.message}`);
   }
@@ -2892,29 +2847,44 @@ function makeCloudSnapshot() {
   };
 }
 
-async function uploadSupabaseSnapshot() {
+async function uploadSupabaseSnapshot(options = {}) {
+  const silent = Boolean(options.silent);
+  const labelPrefix = options.labelPrefix || "manual";
   try {
-    await supabaseRequest("/rest/v1/app_snapshots", {
+    setSyncStatus("syncing", "클라우드 저장 중");
+    const rows = await supabaseRequest("/rest/v1/app_snapshots", {
       method: "POST",
-      headers: { Prefer: "return=minimal" },
+      headers: { Prefer: "return=representation" },
       body: {
-        label: `manual ${new Date().toISOString()}`,
+        label: `${labelPrefix} ${new Date().toISOString()}`,
         data: makeCloudSnapshot(),
       },
     });
-    toast("Supabase에 현재 데이터를 저장했습니다.");
+    const createdAt = Array.isArray(rows) ? rows[0]?.created_at : "";
+    if (createdAt) rememberCloudSnapshotAt(createdAt);
+    setSyncStatus("ready", `저장됨 ${formatSyncClock(createdAt) || "방금"}`, createdAt || syncStatus.lastAt);
+    if (!silent) toast("Supabase에 현재 데이터를 저장했습니다.");
   } catch (error) {
-    toast(`클라우드 저장 실패: ${error.message}`);
+    setSyncStatus("error", "저장 실패");
+    if (!silent) toast(`클라우드 저장 실패: ${error.message}`);
   }
 }
 
-async function downloadLatestSupabaseSnapshot() {
+async function downloadLatestSupabaseSnapshot(options = {}) {
+  const silent = Boolean(options.silent);
+  const onlyIfNewer = Boolean(options.onlyIfNewer);
   try {
+    if (!silent) setSyncStatus("syncing", "클라우드 불러오는 중");
     const rows = await supabaseRequest(
       "/rest/v1/app_snapshots?select=label,created_at,data&order=created_at.desc&limit=1",
     );
     if (!Array.isArray(rows) || rows.length === 0) {
-      toast("불러올 클라우드 데이터가 없습니다.");
+      if (!silent) toast("불러올 클라우드 데이터가 없습니다.");
+      return;
+    }
+    if (onlyIfNewer && rows[0].created_at && rows[0].created_at <= lastCloudSnapshotAt) return;
+    if (silent && isEditingDataField()) {
+      setSyncStatus("pending", "새 데이터 있음 · 불러오기", rows[0].created_at || syncStatus.lastAt);
       return;
     }
     const currentSettings = state.settings;
@@ -2924,11 +2894,14 @@ async function downloadLatestSupabaseSnapshot() {
       supabaseUrl: currentSettings.supabaseUrl,
       supabaseAnonKey: currentSettings.supabaseAnonKey,
     };
-    saveState();
-    toast("Supabase 최신 데이터를 불러왔습니다.");
+    saveState({ skipAutoSync: true });
+    rememberCloudSnapshotAt(rows[0].created_at);
+    setSyncStatus("ready", `불러옴 ${formatSyncClock(rows[0].created_at) || "방금"}`, rows[0].created_at);
+    if (!silent) toast("Supabase 최신 데이터를 불러왔습니다.");
     render();
   } catch (error) {
-    toast(`불러오기 실패: ${error.message}`);
+    setSyncStatus("error", "불러오기 실패");
+    if (!silent) toast(`불러오기 실패: ${error.message}`);
   }
 }
 
@@ -2951,7 +2924,7 @@ async function importSupabaseInbox(options = {}) {
     if (added > 0) {
       saveState();
       render();
-      toast(`클라우드 Inbox ${added}개를 가져왔습니다.`);
+      if (!silent) toast(`클라우드 Inbox ${added}개를 가져왔습니다.`);
     } else if (!silent) {
       toast("새 클라우드 Inbox가 없습니다.");
     }
@@ -3025,8 +2998,16 @@ async function importData(event) {
 attachEvents();
 setView("dashboard");
 
+window.setTimeout(() => {
+  if (supabaseSession?.access_token) {
+    importSupabaseInbox({ silent: true });
+    downloadLatestSupabaseSnapshot({ silent: true, onlyIfNewer: true });
+  }
+}, 1500);
+
 window.setInterval(() => {
   if (supabaseSession?.access_token) {
     importSupabaseInbox({ silent: true });
+    downloadLatestSupabaseSnapshot({ silent: true, onlyIfNewer: true });
   }
 }, 30000);

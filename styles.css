@@ -125,6 +125,26 @@ button {
   box-shadow: 0 0 0 4px rgba(142, 214, 179, 0.15);
 }
 
+.status-dot.local {
+  background: #94a3a8;
+  box-shadow: 0 0 0 4px rgba(148, 163, 168, 0.15);
+}
+
+.status-dot.pending {
+  background: #e7bd53;
+  box-shadow: 0 0 0 4px rgba(231, 189, 83, 0.18);
+}
+
+.status-dot.syncing {
+  background: #75a8d9;
+  box-shadow: 0 0 0 4px rgba(117, 168, 217, 0.18);
+}
+
+.status-dot.error {
+  background: #d96a62;
+  box-shadow: 0 0 0 4px rgba(217, 106, 98, 0.18);
+}
+
 .workspace {
   min-width: 0;
   padding: 22px;
@@ -169,6 +189,10 @@ h3 {
   display: flex;
   gap: 8px;
   align-items: center;
+}
+
+.sync-top-button {
+  font-weight: 800;
 }
 
 input,

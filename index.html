@@ -27,10 +27,10 @@
         </nav>
 
         <div class="sync-card">
-          <span class="status-dot"></span>
+          <span class="status-dot local" id="syncStatusDot"></span>
           <div>
-            <strong>Local mode</strong>
-            <span>Supabase 연결 전</span>
+            <strong id="syncModeLabel">Local mode</strong>
+            <span id="syncDetailLabel">Supabase 연결 전</span>
           </div>
         </div>
       </aside>
@@ -43,6 +43,8 @@
           </div>
           <div class="topbar-actions">
             <input id="globalSearch" type="search" placeholder="환자, 증상, 기록 검색" />
+            <button class="primary-button sync-top-button" data-action="supabase-upload" title="현재 데이터를 클라우드에 저장">클라우드 저장</button>
+            <button class="ghost-button sync-top-button" data-action="supabase-download" title="최신 클라우드 데이터를 불러오기">불러오기</button>
             <button class="ghost-button" id="exportDataButton" title="JSON 내보내기">Export</button>
             <label class="ghost-button import-label" title="JSON 가져오기">
               Import
@@ -71,6 +73,6 @@
 
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
     <script src="./config.public.js"></script>
-    <script src="./app.js?v=20260515-ocr-preprocess"></script>
+    <script src="./app.js?v=20260515-minimal-import"></script>
   </body>
 </html>
