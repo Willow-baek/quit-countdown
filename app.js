@@ -134,6 +134,8 @@ let importLanes = {
   transcriptCleanup: makeImportLane("transcriptCleanup"),
   doctorChart: makeImportLane("doctorChart"),
 };
+let chatGPTPopup = null;
+let chatGPTCloseWatcher = null;
 let learningDraft = {
   from: "",
   to: "",
@@ -3473,21 +3475,83 @@ async function copyExternalPrompt(promptId) {
 }
 
 function openChatGPTWindow() {
-  const width = 760;
-  const height = Math.min(920, window.screen.availHeight || 920);
-  const left = Math.max(0, (window.screen.availWidth || width) - width - 24);
-  const top = 24;
+  setChatGPTShellOpen(true);
+  if (chatGPTPopup && !chatGPTPopup.closed) {
+    positionChatGPTWindow(chatGPTPopup);
+    chatGPTPopup.focus();
+    startChatGPTCloseWatcher();
+    toast("열려 있는 ChatGPT 창을 앞으로 가져왔습니다.");
+    return;
+  }
+
+  const geometry = getChatGPTPopupGeometry();
   const popup = window.open(
     "https://chatgpt.com/",
     "clinicalMemoryChatGPT",
-    `popup=yes,width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=yes`,
+    `popup=yes,width=${geometry.width},height=${geometry.height},left=${geometry.left},top=${geometry.top},resizable=yes,scrollbars=yes`,
   );
   if (popup) {
+    chatGPTPopup = popup;
+    positionChatGPTWindow(popup);
     popup.focus();
+    startChatGPTCloseWatcher();
     toast("ChatGPT 창을 열었습니다.");
   } else {
+    setChatGPTShellOpen(false);
     toast("팝업이 막혔어요. 브라우저 팝업 허용 후 다시 눌러주세요.");
   }
+}
+
+function setChatGPTShellOpen(isOpen) {
+  document.body.classList.toggle("chatgpt-window-open", isOpen);
+}
+
+function getChatGPTPopupGeometry() {
+  const sidebar = document.querySelector(".sidebar");
+  const rect = sidebar?.getBoundingClientRect() || { left: 0, top: 0, width: 472, height: window.innerHeight };
+  const frameX = Math.max(0, Math.round((window.outerWidth - window.innerWidth) / 2));
+  const frameTop = Math.max(0, Math.round(window.outerHeight - window.innerHeight - frameX));
+  const screenLeft = window.screenX ?? window.screenLeft ?? 0;
+  const screenTop = window.screenY ?? window.screenTop ?? 0;
+  const availLeft = window.screen.availLeft || 0;
+  const availTop = window.screen.availTop || 0;
+  const screenWidth = window.screen.availWidth || window.outerWidth || 1200;
+  const screenHeight = window.screen.availHeight || window.outerHeight || 900;
+  const left = Math.max(0, Math.round(screenLeft + frameX + rect.left));
+  const top = Math.max(0, Math.round(screenTop + frameTop + rect.top));
+  const width = Math.max(420, Math.round(rect.width));
+  const requestedHeight = Math.round(rect.height * 0.5);
+  const maxHeight = Math.max(420, screenHeight - top - 24);
+  const height = Math.min(Math.max(460, requestedHeight), maxHeight);
+
+  return {
+    left: Math.min(Math.max(availLeft, left), Math.max(availLeft, availLeft + screenWidth - width - 12)),
+    top: Math.min(Math.max(availTop, top), Math.max(availTop, availTop + screenHeight - height - 12)),
+    width,
+    height,
+  };
+}
+
+function positionChatGPTWindow(popup) {
+  const geometry = getChatGPTPopupGeometry();
+  try {
+    popup.resizeTo(geometry.width, geometry.height);
+    popup.moveTo(geometry.left, geometry.top);
+  } catch {
+    // Some browsers ignore popup window positioning after navigation.
+  }
+}
+
+function startChatGPTCloseWatcher() {
+  window.clearInterval(chatGPTCloseWatcher);
+  chatGPTCloseWatcher = window.setInterval(() => {
+    if (!chatGPTPopup || chatGPTPopup.closed) {
+      chatGPTPopup = null;
+      window.clearInterval(chatGPTCloseWatcher);
+      chatGPTCloseWatcher = null;
+      setChatGPTShellOpen(false);
+    }
+  }, 700);
 }
 
 function fileToDataURL(file) {

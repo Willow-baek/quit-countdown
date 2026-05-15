@@ -12,6 +12,8 @@
   --rose: #f1d2d1;
   --blue: #d8e8f7;
   --shadow: 0 10px 28px rgba(29, 37, 40, 0.08);
+  --sidebar-width: 236px;
+  --sidebar-expanded-width: 472px;
 }
 
 * {
@@ -42,8 +44,13 @@ button {
 
 .app-shell {
   display: grid;
-  grid-template-columns: 236px 1fr;
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
   min-height: 100vh;
+  transition: grid-template-columns 180ms ease;
+}
+
+body.chatgpt-window-open .app-shell {
+  grid-template-columns: var(--sidebar-expanded-width) minmax(0, 1fr);
 }
 
 .sidebar {
@@ -54,6 +61,7 @@ button {
   flex-direction: column;
   gap: 12px;
   border-right: 1px solid rgba(255, 255, 255, 0.06);
+  transition: width 180ms ease;
 }
 
 .brand {
@@ -1141,6 +1149,10 @@ select:focus {
 
 @media (max-width: 980px) {
   .app-shell {
+    grid-template-columns: 1fr;
+  }
+
+  body.chatgpt-window-open .app-shell {
     grid-template-columns: 1fr;
   }
 
