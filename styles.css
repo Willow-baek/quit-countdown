@@ -42,33 +42,36 @@ button {
 
 .app-shell {
   display: grid;
-  grid-template-columns: 260px 1fr;
+  grid-template-columns: 236px 1fr;
   min-height: 100vh;
 }
 
 .sidebar {
-  background: #172124;
+  background: #151b1e;
   color: #eef4f4;
-  padding: 20px;
+  padding: 14px 12px;
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 12px;
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .brand {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
+  padding: 4px 4px 8px;
 }
 
 .brand-mark {
   display: grid;
   place-items: center;
-  width: 42px;
-  height: 42px;
-  border-radius: 8px;
+  width: 34px;
+  height: 34px;
+  border-radius: 7px;
   background: #d8e8f7;
   color: #172124;
+  font-size: 14px;
   font-weight: 800;
 }
 
@@ -82,37 +85,65 @@ button {
 .brand span,
 .sync-card span {
   color: #aebdc1;
-  font-size: 13px;
+  font-size: 12px;
   margin-top: 2px;
+}
+
+.brand strong {
+  font-size: 14px;
+  line-height: 1.2;
 }
 
 .nav {
   display: grid;
-  gap: 6px;
+  gap: 3px;
 }
 
-.nav-item {
+.sidebar-section-title {
+  color: #7f8d91;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 11px 8px 5px;
+}
+
+.sidebar-tools {
+  display: grid;
+  gap: 3px;
+  margin-top: 4px;
+}
+
+.nav-item,
+.sidebar-action {
   width: 100%;
   border: 0;
-  border-radius: 6px;
+  border-radius: 7px;
   background: transparent;
-  color: #dbe7e8;
-  padding: 11px 12px;
+  color: #d7e0e2;
+  padding: 8px 10px;
   text-align: left;
+  font-size: 13px;
+  line-height: 1.25;
+  font-weight: 650;
 }
 
 .nav-item:hover,
-.nav-item.active {
-  background: #263236;
+.nav-item.active,
+.sidebar-action:hover {
+  background: #263033;
   color: #ffffff;
 }
 
+.tool-item {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+}
+
 .sync-card {
-  margin-top: auto;
   display: grid;
-  gap: 10px;
-  padding: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.03);
 }
@@ -131,13 +162,17 @@ button {
   white-space: nowrap;
 }
 
+.sync-card strong {
+  font-size: 13px;
+}
+
 .sidebar-auth-button {
   width: 100%;
   border: 1px solid rgba(255, 255, 255, 0.16);
   border-radius: 6px;
   background: #223033;
   color: #eef4f4;
-  padding: 8px 10px;
+  padding: 7px 9px;
   font-size: 12px;
   font-weight: 800;
 }
@@ -1146,6 +1181,15 @@ select:focus {
     text-align: center;
     padding: 9px 6px;
     font-size: 12px;
+  }
+
+  .sidebar-action {
+    padding: 9px 10px;
+    font-size: 12px;
+  }
+
+  .sidebar-section-title {
+    display: none;
   }
 
   .workspace {

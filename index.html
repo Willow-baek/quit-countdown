@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Clinical Memory Assistant</title>
-    <link rel="stylesheet" href="./styles.css?v=20260516-prompt-controls" />
+    <link rel="stylesheet" href="./styles.css?v=20260516-sidebar-tools" />
   </head>
   <body>
     <div class="app-shell">
@@ -17,15 +17,6 @@
           </div>
         </div>
 
-        <nav class="nav" aria-label="주요 화면">
-          <button class="nav-item active" data-view="dashboard">오늘</button>
-          <button class="nav-item" data-view="inbox">Import Inbox</button>
-          <button class="nav-item" data-view="patients">환자</button>
-          <button class="nav-item" data-view="visits">방문 기록</button>
-          <button class="nav-item" data-view="terms">용어 사전</button>
-          <button class="nav-item" data-view="settings">설정</button>
-        </nav>
-
         <div class="sync-card" id="sidebarAuthCard">
           <div class="sync-status-row">
             <span class="status-dot local" id="syncStatusDot"></span>
@@ -35,6 +26,21 @@
             </div>
           </div>
           <button class="sidebar-auth-button" id="sidebarAuthButton" data-action="open-settings">로그인</button>
+        </div>
+
+        <nav class="nav" aria-label="주요 화면">
+          <span class="sidebar-section-title">메뉴</span>
+          <button class="nav-item active" data-view="dashboard">오늘</button>
+          <button class="nav-item" data-view="inbox">Import Inbox</button>
+          <button class="nav-item" data-view="patients">환자</button>
+          <button class="nav-item" data-view="visits">방문 기록</button>
+          <button class="nav-item" data-view="terms">용어 사전</button>
+          <button class="nav-item" data-view="settings">설정</button>
+        </nav>
+
+        <div class="sidebar-tools">
+          <span class="sidebar-section-title">외부 AI</span>
+          <button class="sidebar-action tool-item" data-action="open-chatgpt">ChatGPT 열기</button>
         </div>
       </aside>
 
@@ -76,7 +82,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
     <script src="./config.public.js"></script>
-    <script src="./prompt-templates.js?v=20260516-prompt-controls"></script>
-    <script src="./app.js?v=20260516-prompt-controls"></script>
+    <script src="./prompt-templates.js?v=20260516-sidebar-tools"></script>
+    <script src="./app.js?v=20260516-sidebar-tools"></script>
   </body>
 </html>

@@ -2784,7 +2784,11 @@ function attachEvents() {
     const id = target.dataset.id;
 
     if (action === "go-inbox") setView("inbox");
-    if (action === "open-settings") setView("settings");
+    if (action === "open-settings") {
+      setView("settings");
+      window.setTimeout(() => document.getElementById("supabaseEmail")?.focus(), 0);
+    }
+    if (action === "open-chatgpt") openChatGPTWindow();
     if (action === "lane-clear") clearImportLane(target.dataset.lane);
     if (action === "lane-process") processImportLane(target.dataset.lane);
     if (action === "capture-selection") captureLearningSelection();
@@ -3465,6 +3469,24 @@ async function copyExternalPrompt(promptId) {
     toast(`${prompt.title}를 복사했습니다.`);
   } catch {
     toast("프롬프트 복사에 실패했습니다. 브라우저 권한을 확인해 주세요.");
+  }
+}
+
+function openChatGPTWindow() {
+  const width = 760;
+  const height = Math.min(920, window.screen.availHeight || 920);
+  const left = Math.max(0, (window.screen.availWidth || width) - width - 24);
+  const top = 24;
+  const popup = window.open(
+    "https://chatgpt.com/",
+    "clinicalMemoryChatGPT",
+    `popup=yes,width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=yes`,
+  );
+  if (popup) {
+    popup.focus();
+    toast("ChatGPT 창을 열었습니다.");
+  } else {
+    toast("팝업이 막혔어요. 브라우저 팝업 허용 후 다시 눌러주세요.");
   }
 }
 
