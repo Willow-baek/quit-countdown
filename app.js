@@ -143,6 +143,7 @@ function makeImportLane(key) {
     imageName: "",
     imagePreview: "",
     ocrStatus: "",
+    screenshotCount: 0,
   };
 }
 
@@ -240,7 +241,7 @@ function escapeHTML(value = "") {
 
 function normalizeTime(value) {
   if (!value) return "";
-  const raw = String(value).trim().replace("시", ":").replace(/\s/g, "");
+  const raw = String(value).trim().replace(/[Oo]/g, "0").replace("시", ":").replace(/\s/g, "");
   const match = raw.match(/(\d{1,2})(?::?(\d{2}))?/);
   if (!match) return "";
   const hour = match[1].padStart(2, "0");
@@ -409,7 +410,11 @@ function parseScheduleText(text, date, sourceFile = "manual paste") {
 }
 
 function parseSmartCrmScheduleText(text, date, therapistName = "백한솔", sourceFile = "smart crm paste") {
-  const normalized = (text || "")
+  const normalizedText = normalizeSmartCrmOcrText(text || "");
+  const listItems = parseSmartCrmListText(normalizedText, date, therapistName, sourceFile);
+  if (listItems.length) return dedupeScheduleItems(listItems);
+
+  const normalized = normalizedText
     .replace(/\r/g, "\n")
     .replace(/[|]+/g, " ")
     .split(/\n+/)
@@ -426,9 +431,224 @@ function parseSmartCrmScheduleText(text, date, therapistName = "백한솔", sour
     .filter(Boolean);
 }
 
+function normalizeSmartCrmOcrText(text) {
+  return String(text || "")
+    .replace(/\r/g, "\n")
+    .replace(/[［【]/g, "[")
+    .replace(/[］】]/g, "]")
+    .replace(/[（]/g, "(")
+    .replace(/[）]/g, ")")
+    .replace(/[：]/g, ":")
+    .replace(/[|]+/g, " ")
+    .replace(/\t/g, " ")
+    .replace(/([0O]?\d|1\d|2[0-3])\s*[:시]\s*([0-5O]\d|[0-5O])/g, (full, hour, minute) => {
+      return `${hour.replace(/[Oo]/g, "0")}:${minute.replace(/[Oo]/g, "0").padStart(2, "0")}`;
+    });
+}
+
+function parseSmartCrmListText(text, defaultDate, therapistName, sourceFile) {
+  const lines = text
+    .split(/\n+/)
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+  if (!lines.length) return [];
+
+  const blocks = splitSmartCrmCalendarBlocks(lines, defaultDate);
+  const items = blocks.flatMap((block) => {
+    return splitSmartCrmAppointmentSegments(block.text).map((segment) => {
+      const time = normalizeKoreanTime(segment.timeText);
+      if (!time) return null;
+
+      const patientName = inferSmartCrmPatientName(segment.text, therapistName);
+      if (!patientName) return null;
+
+      const smartCrmStatus = inferSmartCrmStatus(segment.text);
+      if (smartCrmStatus === "cancelled") return null;
+
+      const visitType = smartCrmStatus === "new" || /초진|신규|new/i.test(segment.text) ? "초진" : "재진";
+      const note = cleanSmartCrmScheduleNote(segment.text, segment.timeText, patientName);
+      return {
+        id: uid("sch"),
+        date: block.date || defaultDate,
+        time,
+        patientName,
+        patientCode: "",
+        visitType,
+        note,
+        sourceFile,
+        matchedVisitId: null,
+        status: smartCrmStatus === "completed" ? "completed" : "scheduled",
+      };
+    });
+  }).filter(Boolean);
+
+  const therapistMatches = items.filter((item) => {
+    return therapistName && item.note.includes(therapistName);
+  });
+  return therapistMatches.length ? therapistMatches : items;
+}
+
+function splitSmartCrmCalendarBlocks(lines, defaultDate) {
+  const blocks = [];
+  let currentDate = defaultDate;
+  let currentLines = [];
+
+  const flush = () => {
+    if (!currentLines.length) return;
+    blocks.push({
+      date: currentDate,
+      text: currentLines.join("\n"),
+    });
+    currentLines = [];
+  };
+
+  lines.forEach((line) => {
+    const dayHit = detectSmartCrmDayMarker(line, defaultDate);
+    if (dayHit) {
+      flush();
+      currentDate = dayHit.date;
+      if (dayHit.rest) currentLines.push(dayHit.rest);
+      return;
+    }
+    currentLines.push(line);
+  });
+  flush();
+
+  return blocks.length ? blocks : [{ date: defaultDate, text: lines.join("\n") }];
+}
+
+function detectSmartCrmDayMarker(line, defaultDate) {
+  const defaultParts = defaultDate.split("-").map(Number);
+  if (defaultParts.length !== 3 || defaultParts.some(Number.isNaN)) return null;
+  const [year, month] = defaultParts;
+
+  const trimmed = line.trim();
+  const compact = trimmed.replace(/\s+/g, "");
+  const dateMatch = compact.match(/(?:20\d{2})[-./년]?(0?\d{1,2})[-./월]?(0?\d{1,2})/);
+  if (dateMatch && !findSmartCrmTimeMatches(trimmed).length) {
+    return {
+      date: `${year}-${String(Number(dateMatch[1])).padStart(2, "0")}-${String(Number(dateMatch[2])).padStart(2, "0")}`,
+      rest: "",
+    };
+  }
+
+  const dayLine = trimmed.match(/^(?:Sun|Mon|Tue|Wed|Thu|Fri|Sat|일|월|화|수|목|금|토)?\s*(\d{1,2})(?:\s|일|$)(.*)$/i);
+  if (!dayLine) return null;
+  const day = Number(dayLine[1]);
+  const rest = (dayLine[2] || "").trim();
+  if (day < 1 || day > 31) return null;
+  if (findSmartCrmTimeMatches(rest).length && trimmed.length > 8) {
+    return {
+      date: `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`,
+      rest,
+    };
+  }
+  if (rest && /[가-힣A-Za-z]{2,}/.test(rest)) return null;
+  if (trimmed.length > 12) return null;
+  return {
+    date: `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`,
+    rest: "",
+  };
+}
+
+function splitSmartCrmAppointmentSegments(text) {
+  const matches = findSmartCrmTimeMatches(text);
+  return matches.map((match, index) => {
+    const next = matches[index + 1];
+    return {
+      timeText: match[0],
+      text: text.slice(match.index, next?.index || text.length).trim(),
+    };
+  });
+}
+
+function findSmartCrmTimeMatches(text) {
+  return [...String(text || "").matchAll(/(?:오전|오후)?\s*([0O]?\d|1\d|2[0-3])\s*[:시]\s*([0-5O]\d|[0-5O])/g)];
+}
+
+function inferSmartCrmPatientName(segment, therapistName) {
+  const stopWords = new Set([
+    "도수",
+    "운동",
+    "치료",
+    "도수치료",
+    "재진",
+    "초진",
+    "신규",
+    "예약",
+    "정상예약",
+    "방문",
+    "예약취소",
+    "상태",
+    "완료",
+    "진료",
+    "진료중",
+    "진료완료",
+    "여진",
+    "남",
+    "녀",
+    "전체",
+    "조회",
+    "새로고침",
+    "기본크기",
+    "월별예약리스트",
+    "일일현황리스트",
+  ]);
+
+  const cleaned = String(segment || "")
+    .replace(/(?:오전|오후)?\s*([0O]?\d|1\d|2[0-3])\s*[:시]\s*([0-5O]\d|[0-5O])/g, " ")
+    .replace(/\[[^\]]*]/g, " ")
+    .replace(/\([^)]*\)/g, " ")
+    .replace(therapistName || "", " ")
+    .replace(/도수치료\d*|운동\d*|TRM|MPT|CFO|F\/U|ok|OK|패키지|연락|변경|상담|재상담/gi, " ")
+    .replace(/[0-9]+(?:회|분|세|년|월|일)?/g, " ")
+    .replace(/[()[\]{}.,/\\|:;~+_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const parts = cleaned.split(" ").map((part) => part.replace(/님$/, "")).filter(Boolean);
+  return parts.find((part) => {
+    if (stopWords.has(part)) return false;
+    if (part.length < 2 || part.length > 8) return false;
+    if (!/[가-힣]/.test(part)) return false;
+    if (!/^[가-힣A-Za-z]+$/.test(part)) return false;
+    if (/도수|치료|운동|예약|방문|여진|상담/.test(part)) return false;
+    return true;
+  }) || "";
+}
+
+function cleanSmartCrmScheduleNote(segment, timeText, patientName) {
+  return String(segment || "")
+    .replace(timeText || "", "")
+    .replace(patientName || "", "")
+    .replace(/\[상태:[^\]]+]/g, "")
+    .replace(/\s+/g, " ")
+    .replace(/\s+([/\]])/g, "$1")
+    .trim();
+}
+
+function inferSmartCrmStatus(segment) {
+  const value = String(segment || "");
+  if (/\[상태:\s*취소]|예약취소|취소/.test(value)) return "cancelled";
+  if (/\[상태:\s*신규]|초진|신규/.test(value)) return "new";
+  if (/\[상태:\s*완료]|방문|치료완료|내원/.test(value)) return "completed";
+  if (/\[상태:\s*예약]|정상예약/.test(value)) return "scheduled";
+  return "scheduled";
+}
+
+function dedupeScheduleItems(items) {
+  const seen = new Set();
+  return items.filter((item) => {
+    const key = `${item.date}|${item.time}|${item.patientName}|${item.note}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function extractScheduleItemsFromLine(line, date, therapistName, sourceFile) {
   const items = [];
-  const timeMatches = [...line.matchAll(/(?:오전|오후)?\s*(\d{1,2})[:시]\s?(\d{0,2})/g)];
+  const timeMatches = findSmartCrmTimeMatches(line);
   if (!timeMatches.length) return [];
 
   timeMatches.forEach((match, index) => {
@@ -469,7 +689,8 @@ function normalizeKoreanTime(value) {
   if (!value) return "";
   const isPM = value.includes("오후");
   const isAM = value.includes("오전");
-  const match = value.match(/(\d{1,2})[:시]\s?(\d{0,2})/);
+  const normalized = String(value).replace(/[Oo]/g, "0");
+  const match = normalized.match(/(\d{1,2})[:시]\s?(\d{0,2})/);
   if (!match) return "";
   let hour = Number(match[1]);
   const minute = (match[2] || "00").padStart(2, "0");
@@ -790,12 +1011,14 @@ function renderWorkflowImportLanes() {
 
 function renderImportLane(lane) {
   const isSchedule = lane.kind === "schedule";
+  const defaultStatus = isSchedule ? "Smart CRM · 여러 장 붙여넣기" : "초진 차트 · Ctrl/Cmd+V";
+  const placeholder = isSchedule ? "여러 장 붙여넣기" : "여기에 붙여넣기";
   return `
     <article class="paste-lane" data-lane="${lane.key}" tabindex="0" aria-label="${escapeHTML(lane.title)} 붙여넣기">
       <div class="paste-lane-head">
         <div>
           <h2>${escapeHTML(lane.title)}</h2>
-          <p class="note">${escapeHTML(lane.ocrStatus || `${isSchedule ? "Smart CRM" : "초진 차트"} · Ctrl/Cmd+V`)}</p>
+          <p class="note">${escapeHTML(lane.ocrStatus || defaultStatus)}</p>
         </div>
         <span class="badge ${isSchedule ? "follow" : "new"}">${isSchedule ? escapeHTML(lane.therapist || "담당자") : "신환"}</span>
       </div>
@@ -812,7 +1035,7 @@ function renderImportLane(lane) {
         ${
           lane.imagePreview
             ? `<div class="lane-image-preview"><img src="${lane.imagePreview}" alt="붙여넣은 이미지 미리보기" /><span>${escapeHTML(lane.imageName || "pasted image")}</span></div>`
-            : `<div class="lane-placeholder">여기에 붙여넣기</div>`
+            : `<div class="lane-placeholder">${escapeHTML(placeholder)}</div>`
         }
         <textarea id="laneText-${lane.key}" placeholder="${isSchedule ? "OCR 텍스트 또는 스케줄 텍스트" : "OCR 텍스트 또는 초진 차트 텍스트"}">${escapeHTML(lane.text)}</textarea>
       </div>
@@ -1708,6 +1931,7 @@ async function handleImportLanePaste(event) {
       updateImportLaneFromDOM(laneKey);
       lane.imageName = file.name || `pasted-${new Date().toISOString()}.png`;
       lane.imagePreview = preview;
+      lane.screenshotCount = (lane.screenshotCount || 0) + 1;
       lane.ocrStatus = "OCR 읽는 중...";
       changed = true;
     }
@@ -1750,13 +1974,24 @@ async function runLaneOcr(laneKey) {
         }
       },
     });
-    const text = result?.data?.text?.trim() || "";
+    const rawText = result?.data?.text?.trim() || "";
+    const text =
+      lane.kind === "schedule"
+        ? (await buildSmartCrmTaggedOcrText(lane.imagePreview, result?.data)) || rawText
+        : rawText;
     if (!text) {
       lane.ocrStatus = "OCR 결과 없음. 텍스트를 붙여넣어 주세요.";
       render();
       return;
     }
     lane.text = [lane.text, text].filter(Boolean).join("\n").trim();
+    if (lane.kind === "schedule") {
+      lane.imageName = "";
+      lane.imagePreview = "";
+      lane.ocrStatus = `OCR ${lane.screenshotCount || 1}장 누적 · 더 붙여넣거나 반영`;
+      render();
+      return;
+    }
     lane.ocrStatus = "OCR 완료, 자동 반영 중";
     render();
     processImportLane(laneKey, { auto: true });
@@ -1765,6 +2000,206 @@ async function runLaneOcr(laneKey) {
     toast(`OCR 실패: ${error.message}`);
     render();
   }
+}
+
+async function buildSmartCrmTaggedOcrText(imageSrc, ocrData) {
+  const lines = collectOcrLines(ocrData);
+  if (!imageSrc || !lines.length) return "";
+
+  try {
+    const image = await loadImageElement(imageSrc);
+    const canvas = document.createElement("canvas");
+    canvas.width = image.naturalWidth || image.width;
+    canvas.height = image.naturalHeight || image.height;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (!context) return "";
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+    return lines
+      .map((line) => {
+        const text = line.text.trim();
+        if (!text) return "";
+        const status = classifySmartCrmLineStatus(context, line);
+        return status ? `${text} [상태:${status}]` : text;
+      })
+      .filter(Boolean)
+      .join("\n");
+  } catch {
+    return "";
+  }
+}
+
+function collectOcrLines(ocrData) {
+  const directLines = Array.isArray(ocrData?.lines) ? ocrData.lines : [];
+  const nestedLines = Array.isArray(ocrData?.blocks)
+    ? ocrData.blocks.flatMap((block) => {
+        return (block.paragraphs || []).flatMap((paragraph) => paragraph.lines || []);
+      })
+    : [];
+  const lines = [...directLines, ...nestedLines]
+    .map((line) => {
+      const words = collectOcrWords(line);
+      return {
+        text: getOcrEntityText(line) || words.map(getOcrEntityText).filter(Boolean).join(" "),
+        words,
+        bbox: normalizeOcrBbox(line.bbox),
+      };
+    })
+    .filter((line) => line.text.trim());
+
+  if (lines.length) return dedupeOcrLines(lines);
+
+  const words = collectOcrWords(ocrData).filter((word) => getOcrEntityText(word));
+  if (!words.length) return [];
+  const sorted = words.sort((a, b) => {
+    const abox = normalizeOcrBbox(a.bbox);
+    const bbox = normalizeOcrBbox(b.bbox);
+    return centerOfBox(abox).y - centerOfBox(bbox).y || centerOfBox(abox).x - centerOfBox(bbox).x;
+  });
+  const grouped = [];
+  sorted.forEach((word) => {
+    const box = normalizeOcrBbox(word.bbox);
+    const center = centerOfBox(box);
+    const line = grouped.find((candidate) => Math.abs(candidate.centerY - center.y) < 12);
+    if (line) {
+      line.words.push(word);
+      line.centerY = (line.centerY + center.y) / 2;
+    } else {
+      grouped.push({ centerY: center.y, words: [word] });
+    }
+  });
+
+  return grouped.map((line) => {
+    const lineWords = line.words.sort((a, b) => centerOfBox(normalizeOcrBbox(a.bbox)).x - centerOfBox(normalizeOcrBbox(b.bbox)).x);
+    return {
+      text: lineWords.map(getOcrEntityText).filter(Boolean).join(" "),
+      words: lineWords,
+      bbox: mergeOcrBoxes(lineWords.map((word) => normalizeOcrBbox(word.bbox))),
+    };
+  });
+}
+
+function dedupeOcrLines(lines) {
+  const seen = new Set();
+  return lines.filter((line) => {
+    const box = line.bbox;
+    const key = `${line.text}|${Math.round(box.x0)}|${Math.round(box.y0)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function collectOcrWords(entity) {
+  if (!entity) return [];
+  if (Array.isArray(entity.words)) return entity.words;
+  if (Array.isArray(entity.symbols)) return entity.symbols;
+  if (Array.isArray(entity.blocks)) {
+    return entity.blocks.flatMap(collectOcrWords);
+  }
+  if (Array.isArray(entity.paragraphs)) {
+    return entity.paragraphs.flatMap(collectOcrWords);
+  }
+  if (Array.isArray(entity.lines)) {
+    return entity.lines.flatMap(collectOcrWords);
+  }
+  return [];
+}
+
+function getOcrEntityText(entity) {
+  return String(entity?.text || entity?.symbol || "").trim();
+}
+
+function normalizeOcrBbox(bbox) {
+  if (!bbox) return { x0: 0, y0: 0, x1: 0, y1: 0 };
+  return {
+    x0: Number(bbox.x0 ?? bbox.left ?? bbox.x ?? 0),
+    y0: Number(bbox.y0 ?? bbox.top ?? bbox.y ?? 0),
+    x1: Number(bbox.x1 ?? (bbox.left ?? bbox.x ?? 0) + (bbox.width ?? 0)),
+    y1: Number(bbox.y1 ?? (bbox.top ?? bbox.y ?? 0) + (bbox.height ?? 0)),
+  };
+}
+
+function mergeOcrBoxes(boxes) {
+  const valid = boxes.filter((box) => box.x1 > box.x0 && box.y1 > box.y0);
+  if (!valid.length) return { x0: 0, y0: 0, x1: 0, y1: 0 };
+  return {
+    x0: Math.min(...valid.map((box) => box.x0)),
+    y0: Math.min(...valid.map((box) => box.y0)),
+    x1: Math.max(...valid.map((box) => box.x1)),
+    y1: Math.max(...valid.map((box) => box.y1)),
+  };
+}
+
+function centerOfBox(box) {
+  return {
+    x: (box.x0 + box.x1) / 2,
+    y: (box.y0 + box.y1) / 2,
+  };
+}
+
+function classifySmartCrmLineStatus(context, line) {
+  const timeWord = (line.words || []).find((word) => findSmartCrmTimeMatches(getOcrEntityText(word)).length);
+  if (!timeWord) return "";
+  const box = normalizeOcrBbox(timeWord.bbox || line.bbox);
+  const color = sampleSmartCrmBackground(context, box);
+  return classifySmartCrmColor(color);
+}
+
+function sampleSmartCrmBackground(context, box) {
+  const canvas = context.canvas;
+  const x0 = Math.max(0, Math.floor(box.x0 - 10));
+  const y0 = Math.max(0, Math.floor(box.y0 - 6));
+  const x1 = Math.min(canvas.width, Math.ceil(box.x1 + 80));
+  const y1 = Math.min(canvas.height, Math.ceil(box.y1 + 8));
+  const width = Math.max(1, x1 - x0);
+  const height = Math.max(1, y1 - y0);
+  const pixels = context.getImageData(x0, y0, width, height).data;
+  let r = 0;
+  let g = 0;
+  let b = 0;
+  let count = 0;
+
+  for (let index = 0; index < pixels.length; index += 4) {
+    const red = pixels[index];
+    const green = pixels[index + 1];
+    const blue = pixels[index + 2];
+    const max = Math.max(red, green, blue);
+    const min = Math.min(red, green, blue);
+    const brightness = (red + green + blue) / 3;
+    const saturation = max ? (max - min) / max : 0;
+    if (brightness < 80 || brightness > 248 || saturation < 0.08) continue;
+    r += red;
+    g += green;
+    b += blue;
+    count += 1;
+  }
+
+  if (!count) return null;
+  return {
+    r: r / count,
+    g: g / count,
+    b: b / count,
+  };
+}
+
+function classifySmartCrmColor(color) {
+  if (!color) return "";
+  const { r, g, b } = color;
+  if (r > 190 && g > 165 && b < 165) return "신규";
+  if (g > r + 25 && g > b + 15) return "예약";
+  if (b > r + 18 && b > g + 8) return "완료";
+  if (r > g + 25 && r > b + 8) return "취소";
+  return "";
+}
+
+function loadImageElement(src) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = reject;
+    image.src = src;
+  });
 }
 
 function captureLearningSelection() {
@@ -1868,18 +2303,20 @@ function processImportLane(laneKey, options = {}) {
       return;
     }
 
+    const parsedDates = new Set(items.map((item) => item.date || lane.date));
     state.scheduleItems = [
       ...items,
       ...state.scheduleItems.filter((item) => {
         const managedSource = ["smart crm paste", "smart crm quick import", sourceFile].includes(item.sourceFile);
-        return item.date !== lane.date || !managedSource;
+        return !parsedDates.has(item.date) || !managedSource;
       }),
     ];
-    dashboardWeekStart = getWeekStartISO(lane.date);
+    dashboardWeekStart = getWeekStartISO(items[0]?.date || lane.date);
     selectedScheduleId = items[0]?.id || selectedScheduleId;
     lane.text = "";
     lane.imageName = "";
     lane.imagePreview = "";
+    lane.screenshotCount = 0;
     lane.ocrStatus = auto ? "OCR 자동 반영 완료" : "";
     saveState();
     toast(`${lane.title}: ${items.length}개 예약을 반영했습니다.`);
