@@ -9,6 +9,71 @@ const todayISO = () => new Date().toISOString().slice(0, 10);
 const nowTime = () => new Date().toTimeString().slice(0, 5);
 const uid = (prefix) => `${prefix}_${Math.random().toString(36).slice(2, 9)}`;
 
+const EXTERNAL_AI_PROMPTS = {
+  schedule: {
+    title: "스케줄 OCR 정리 프롬프트",
+    description: "Smart CRM 스케줄 캡쳐를 외부 AI에 넣고, 앱에 붙여넣을 최소 텍스트만 받습니다.",
+    text: `아래 스케줄 캡쳐 이미지 또는 OCR 텍스트에서 필요한 정보만 추출해 주세요.
+
+목표:
+- 앱에 붙여넣을 스케줄 후보 텍스트 생성
+- 필요한 필드는 예약 시간, 환자 이름, 치료 시간 숫자 3개뿐입니다.
+
+출력 형식:
+09:00 김시완 40
+09:50 안규빈 60
+
+규칙:
+- 한 예약을 한 줄로 출력하세요.
+- 시간은 HH:MM 형식으로 출력하세요.
+- 환자 이름은 [도수(백한솔)] 바로 뒤에 나오는 이름에서 "님"을 제거해 출력하세요.
+- 치료 시간은 [도수치료60], [도수60분], [운동40패키지], [운동치료40] 같은 표현에서 숫자만 출력하세요.
+- 취소된 예약은 출력하지 마세요.
+- 상태, ok, 여진, 메모, 환자 요청사항, 기타 부가 텍스트는 출력하지 마세요.
+- 불확실한 값은 ? 로 표시하세요.
+- 설명, 표, markdown 없이 결과 줄만 출력하세요.`,
+  },
+  doctorChart: {
+    title: "초진 차트 정리 프롬프트",
+    description: "의사 초진 차트 캡쳐나 텍스트를 앱에 붙여넣기 쉬운 구조로 정리합니다.",
+    text: `아래 초진 차트 이미지 또는 텍스트를 물리치료 초진 정리용으로 구조화해 주세요.
+
+목표:
+- 앱에 붙여넣을 초진 요약 후보 생성
+- 확실하지 않은 값은 ? 로 표시
+- 원문에 없는 내용은 추측하지 말고 비워두거나 ? 로 표시
+
+출력 형식은 아래 key를 그대로 사용하세요:
+patient_name:
+chief_complaint:
+onset_history:
+pain_location:
+aggravating_factors:
+easing_factors:
+relevant_medical_info:
+precautions_red_flags:
+initial_signal:
+secondary_signal:
+noise:
+suggested_tracking_variables:
+
+정리 기준:
+- chief_complaint: 주호소
+- onset_history: 발생 시점/경과
+- pain_location: 통증 위치
+- aggravating_factors: 악화 요인
+- easing_factors: 완화 요인
+- relevant_medical_info: 관련 병력/검사/의학 정보
+- precautions_red_flags: 주의사항 또는 red flag
+- initial_signal: 현재 치료 방향과 직접 관련 큰 정보
+- secondary_signal: 관련은 있지만 우선순위가 낮은 정보
+- noise: 현재 치료 방향에 영향이 적은 정보
+- suggested_tracking_variables: 재진 때 반복 확인할 변수. 쉼표로 구분하세요.
+
+설명 문장이나 markdown 없이 key-value 형식만 출력하세요.`,
+  },
+};
+
 const DEFAULT_TERMS = [
   ["해피", "HEP", "home exercise program", "exercise"],
   ["홈 엑서사이즈", "HEP", "home exercise program", "exercise"],
@@ -500,6 +565,7 @@ function parseSmartCrmScheduleCandidates(text, date, therapistName = "백한솔"
 function parseSmartCrmScheduleCandidate(segment, date, therapistName, sourceFile) {
   const time = normalizeKoreanTime(segment.timeText);
   if (!time) return null;
+  if (/예약\s*취소|예약취소|\[?\s*상태\s*[:：]?\s*취소|취소/.test(segment.text)) return null;
 
   const patientName = inferSmartCrmPatientName(segment.text, therapistName);
   const treatment = extractSmartCrmTreatment(segment.text);
@@ -875,6 +941,131 @@ function discardScheduleCandidate(id) {
   render();
 }
 
+function createInitialVisitFromDoctorChart(id) {
+  const item = state.rawInbox.find((entry) => entry.id === id && entry.type === "doctor_chart");
+  if (!item) return;
+
+  const patientQuery = document.getElementById(`doctorPatient-${id}`)?.value.trim() || "";
+  const date = document.getElementById(`doctorDate-${id}`)?.value || item.recordedDate || todayISO();
+  if (!patientQuery) {
+    toast("환자명 또는 코드를 입력해 주세요.");
+    return;
+  }
+
+  const text = item.ocrText || item.text || "";
+  let patient = findPatientByNameOrCode(patientQuery, patientQuery);
+  if (!patient) {
+    const nextNumber = String(state.patients.length + 1).padStart(3, "0");
+    patient = {
+      id: uid("patient"),
+      code: patientQuery.startsWith("P") ? patientQuery : `P${nextNumber}`,
+      name: patientQuery.startsWith("P") ? extractStructuredValue(text, ["patient_name"]) || "신규 환자" : patientQuery,
+      sex: "",
+      age: "",
+      region: extractStructuredValue(text, ["pain_location"]) || inferRegion(text),
+      flags: extractStructuredValue(text, ["precautions_red_flags"]) || "",
+      createdAt: new Date().toISOString(),
+    };
+    state.patients.push(patient);
+  } else {
+    patient.region = patient.region || extractStructuredValue(text, ["pain_location"]) || inferRegion(text);
+    patient.flags = patient.flags || extractStructuredValue(text, ["precautions_red_flags"]) || "";
+  }
+
+  const visit = buildInitialVisitFromDoctorChart(item, patient, date);
+  state.visits.unshift(visit);
+  item.status = "matched";
+  item.patientHint = patient.name;
+  item.patientId = patient.id;
+  item.matchedVisitId = visit.id;
+  selectedPatientId = patient.id;
+  selectedVisitId = visit.id;
+  saveState();
+  toast("초진 요약 후보로 방문 기록을 만들었습니다.");
+  setView("visits");
+}
+
+function buildInitialVisitFromDoctorChart(item, patient, date) {
+  const text = item.ocrText || item.text || "";
+  const chief = extractStructuredValue(text, ["chief_complaint", "chief complaint"]);
+  const onset = extractStructuredValue(text, ["onset_history", "onset/history", "history"]);
+  const pain = extractStructuredValue(text, ["pain_location", "pain location"]);
+  const aggravating = extractStructuredValue(text, ["aggravating_factors", "aggravating factors"]);
+  const easing = extractStructuredValue(text, ["easing_factors", "easing factors"]);
+  const medical = extractStructuredValue(text, ["relevant_medical_info", "relevant medical info"]);
+  const precautions = extractStructuredValue(text, ["precautions_red_flags", "precautions/red flags"]);
+  const initialSignal = extractStructuredValue(text, ["initial_signal", "initial signal"]);
+  const secondarySignal = extractStructuredValue(text, ["secondary_signal", "secondary signal"]);
+  const noise = extractStructuredValue(text, ["noise"]);
+  const tracking = splitStructuredList(extractStructuredValue(text, ["suggested_tracking_variables", "suggested tracking variables"]));
+
+  const summary = [chief, onset, pain].filter(Boolean).join(" / ") || summarizeTranscript(text);
+  const signalList = splitStructuredList(initialSignal);
+  const secondaryList = splitStructuredList(secondarySignal);
+  const trackingItems = tracking.map((name) => ({
+    id: uid("track"),
+    name,
+    value: "baseline 확인",
+    trend: "check",
+  }));
+
+  const visit = {
+    id: uid("visit"),
+    patientId: patient.id,
+    date,
+    time: nowTime(),
+    visitType: "초진",
+    sourceInboxId: item.id,
+    transcript: text,
+    signals: signalList.length ? signalList : extractSignals(text).signals,
+    secondarySignals: secondaryList,
+    noise,
+    tracking: trackingItems.length ? trackingItems : inferTracking(text),
+    treatment: "",
+    hep: "",
+    homework: "",
+    nextFocus: [aggravating, easing, medical, precautions].filter(Boolean).join(" / "),
+    draft: "",
+    confirmed: false,
+    summary,
+    createdAt: new Date().toISOString(),
+  };
+  visit.draft = generateDraft(visit, patient);
+  return visit;
+}
+
+function discardDoctorChartCandidate(id) {
+  const item = state.rawInbox.find((entry) => entry.id === id && entry.type === "doctor_chart");
+  if (!item) return;
+  item.status = "discarded";
+  saveState();
+  toast("초진 요약 후보를 폐기했습니다.");
+  render();
+}
+
+function extractStructuredValue(text, labels) {
+  const normalizedLabels = labels.map((label) => label.toLowerCase().replace(/[\s/-]+/g, "_"));
+  const lines = String(text || "").split(/\n+/);
+  for (const line of lines) {
+    const clean = line.replace(/^[*\-\s]+/, "").trim();
+    const match = clean.match(/^([^:：]+)\s*[:：]\s*(.*)$/);
+    if (!match) continue;
+    const key = match[1].trim().toLowerCase().replace(/[\s/-]+/g, "_");
+    if (normalizedLabels.includes(key)) {
+      const value = match[2].trim();
+      return value === "?" ? "" : value;
+    }
+  }
+  return "";
+}
+
+function splitStructuredList(value) {
+  return String(value || "")
+    .split(/[,;\n]+/)
+    .map((item) => item.replace(/^[*\-\s]+/, "").trim())
+    .filter((item) => item && item !== "?");
+}
+
 function extractSignals(text) {
   const signals = [];
   const secondary = [];
@@ -1046,6 +1237,37 @@ function renderWorkflowImportLanes() {
       ${renderImportLane(importLanes.tomorrowSchedule)}
       ${renderImportLane(importLanes.doctorChart)}
     </section>
+  `;
+}
+
+function renderExternalPromptPanel() {
+  return `
+    <section class="prompt-panel">
+      <div class="panel-header">
+        <div>
+          <h2>외부 AI 프롬프트</h2>
+          <p class="note">이미지나 원문은 ChatGPT/Claude/Gemini에서 정리하고, 결과만 아래 Import 칸에 붙여넣습니다.</p>
+        </div>
+      </div>
+      <div class="prompt-grid">
+        ${renderPromptCard("schedule", "출력 예: 09:00 김시완 40")}
+        ${renderPromptCard("doctorChart", "출력 예: chief_complaint: ...")}
+      </div>
+    </section>
+  `;
+}
+
+function renderPromptCard(promptId, sample) {
+  const prompt = EXTERNAL_AI_PROMPTS[promptId];
+  return `
+    <article class="prompt-card">
+      <div>
+        <h3>${escapeHTML(prompt.title)}</h3>
+        <p class="note">${escapeHTML(prompt.description)}</p>
+        <code>${escapeHTML(sample)}</code>
+      </div>
+      <button class="ghost-button" data-action="copy-import-prompt" data-prompt="${escapeHTML(promptId)}">Copy Prompt</button>
+    </article>
   `;
 }
 
@@ -1236,6 +1458,7 @@ function renderScheduleItem(item) {
 
 function renderInboxMatchCard(item) {
   if (item.type === "schedule_candidate") return renderScheduleCandidateCard(item);
+  if (item.type === "doctor_chart") return renderDoctorChartCandidateCard(item);
 
   const match = item.type === "transcript" ? findBestScheduleForInbox(item) : null;
   return `
@@ -1259,6 +1482,37 @@ function renderInboxMatchCard(item) {
             ? `<button class="primary-button" data-action="create-visit" data-id="${item.id}" data-schedule="${match?.item.id || ""}">방문 기록 생성</button>`
             : ""
         }
+      </div>
+    </article>
+  `;
+}
+
+function renderDoctorChartCandidateCard(item) {
+  const suggestedName = item.patientHint || extractStructuredValue(item.ocrText || item.text || "", ["patient_name"]) || "";
+  return `
+    <article class="item">
+      <div class="item-top">
+        <div>
+          <h3>초진 요약 후보</h3>
+          <div class="meta">${escapeHTML(item.recordedDate || item.createdAt.slice(0, 10))} · ${escapeHTML(suggestedName || "환자명 확인")}</div>
+        </div>
+        <span class="badge new">초진</span>
+      </div>
+      <div class="field-grid">
+        <div class="field">
+          <label for="doctorPatient-${item.id}">환자명/코드</label>
+          <input id="doctorPatient-${item.id}" value="${escapeHTML(suggestedName)}" placeholder="우재이 또는 P001" />
+        </div>
+        <div class="field">
+          <label for="doctorDate-${item.id}">초진일</label>
+          <input id="doctorDate-${item.id}" type="date" value="${escapeHTML(item.recordedDate || todayISO())}" />
+        </div>
+      </div>
+      <div class="transcript mini">${escapeHTML(item.ocrText || item.text || "정리 텍스트 없음")}</div>
+      <div class="split-actions">
+        <button class="small-button" data-action="preview-inbox" data-id="${item.id}">보기</button>
+        <button class="ghost-button" data-action="discard-doctor-chart" data-id="${item.id}">폐기</button>
+        <button class="primary-button" data-action="create-initial-visit" data-id="${item.id}">초진 기록 생성</button>
       </div>
     </article>
   `;
@@ -1303,6 +1557,7 @@ function renderInbox() {
   const processed = state.rawInbox.filter((item) => item.status !== "new");
 
   container.innerHTML = `
+    ${renderExternalPromptPanel()}
     ${renderWorkflowImportLanes()}
     <div class="grid two">
       <section class="panel">
@@ -1867,6 +2122,9 @@ function attachEvents() {
     if (action === "create-visit") createVisitFromInbox(id, target.dataset.schedule || null);
     if (action === "confirm-schedule-candidate") confirmScheduleCandidate(id);
     if (action === "discard-schedule-candidate") discardScheduleCandidate(id);
+    if (action === "create-initial-visit") createInitialVisitFromDoctorChart(id);
+    if (action === "discard-doctor-chart") discardDoctorChartCandidate(id);
+    if (action === "copy-import-prompt") await copyExternalPrompt(target.dataset.prompt);
     if (action === "preview-inbox") {
       const item = state.rawInbox.find((entry) => entry.id === id);
       if (item) {
@@ -2449,6 +2707,17 @@ function applyLearnedCorrectionToOpenFields(from, to) {
   });
 }
 
+async function copyExternalPrompt(promptId) {
+  const prompt = EXTERNAL_AI_PROMPTS[promptId];
+  if (!prompt) return;
+  try {
+    await navigator.clipboard.writeText(prompt.text);
+    toast(`${prompt.title}를 복사했습니다.`);
+  } catch {
+    toast("프롬프트 복사에 실패했습니다. 브라우저 권한을 확인해 주세요.");
+  }
+}
+
 function fileToDataURL(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -2515,32 +2784,18 @@ function processImportLane(laneKey, options = {}) {
       return;
     }
 
-    let patient = findPatientByNameOrCode(lane.patientHint, lane.patientHint);
-    if (!patient && lane.patientHint) {
-      const nextNumber = String(state.patients.length + 1).padStart(3, "0");
-      patient = {
-        id: uid("patient"),
-        code: lane.patientHint.startsWith("P") ? lane.patientHint : `P${nextNumber}`,
-        name: lane.patientHint.startsWith("P") ? "신규 환자" : lane.patientHint,
-        sex: "",
-        age: "",
-        region: inferRegion(lane.text),
-        flags: "doctor chart imported",
-        createdAt: new Date().toISOString(),
-      };
-      state.patients.push(patient);
-    }
+    const patient = findPatientByNameOrCode(lane.patientHint, lane.patientHint);
 
     state.rawInbox.unshift({
       id: uid("inbox"),
       type: "doctor_chart",
-      fileName: lane.imageName || "doctor_chart_paste",
+      fileName: "initial_chart_candidate",
       createdAt: new Date().toISOString(),
       recordedDate: lane.date,
       patientHint: lane.patientHint,
       patientId: patient?.id || null,
       ocrText: lane.text,
-      status: "uploaded",
+      status: "new",
       matchedVisitId: null,
     });
 
@@ -2550,8 +2805,9 @@ function processImportLane(laneKey, options = {}) {
     lane.imagePreview = "";
     lane.ocrStatus = auto ? "OCR 자동 반영 완료" : "";
     saveState();
-    toast("초진 차트 정보를 Inbox에 반영했습니다.");
-    render();
+    toast("초진 요약 후보를 Inbox에 만들었습니다.");
+    if (currentView !== "inbox") setView("inbox");
+    else render();
   }
 }
 
@@ -2612,43 +2868,24 @@ async function handleDoctorChartForm(form) {
   const patientQuery = form.querySelector("#doctorChartPatient").value.trim();
   const file = form.querySelector("#doctorChartImage").files[0];
   const text = form.querySelector("#doctorChartText").value.trim();
-  let patient = findPatientByNameOrCode(patientQuery, patientQuery);
-
-  if (!patient && patientQuery) {
-    const nextNumber = String(state.patients.length + 1).padStart(3, "0");
-    patient = {
-      id: uid("patient"),
-      code: patientQuery.startsWith("P") ? patientQuery : `P${nextNumber}`,
-      name: patientQuery.startsWith("P") ? "신규 환자" : patientQuery,
-      sex: "",
-      age: "",
-      region: "",
-      flags: "",
-      createdAt: new Date().toISOString(),
-    };
-    state.patients.push(patient);
-  }
+  const patient = findPatientByNameOrCode(patientQuery, patientQuery);
 
   state.rawInbox.unshift({
     id: uid("inbox"),
     type: "doctor_chart",
-    fileName: file?.name || "doctor_chart_capture",
+    fileName: "initial_chart_candidate",
     createdAt: new Date().toISOString(),
     recordedDate: todayISO(),
     patientHint: patientQuery,
     patientId: patient?.id || null,
     ocrText: text,
-    status: "uploaded",
+    status: "new",
     matchedVisitId: null,
   });
 
-  if (patient && text) {
-    patient.flags = [patient.flags, "doctor chart imported"].filter(Boolean).join(", ");
-    if (!patient.region) patient.region = inferRegion(text);
-  }
   saveState();
   form.reset();
-  toast("초진 차트 캡쳐 정보를 저장했습니다.");
+  toast("초진 요약 후보를 Inbox에 만들었습니다.");
   render();
 }
 

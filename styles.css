@@ -428,6 +428,12 @@ select:focus {
   white-space: pre-wrap;
 }
 
+.transcript.mini {
+  max-height: 118px;
+  margin-top: 10px;
+  font-size: 12px;
+}
+
 .draft-box {
   min-height: 160px;
   white-space: pre-wrap;
@@ -596,6 +602,42 @@ select:focus {
 .paste-lane-actions .primary-button,
 .paste-lane-actions .ghost-button {
   padding: 8px 10px;
+}
+
+.prompt-panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  margin-bottom: 14px;
+}
+
+.prompt-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px;
+}
+
+.prompt-card {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfc;
+  padding: 12px;
+}
+
+.prompt-card code {
+  display: inline-block;
+  margin-top: 8px;
+  color: var(--accent-strong);
+  background: #eef3f4;
+  border-radius: 5px;
+  padding: 4px 6px;
+  font-size: 12px;
 }
 
 .dashboard-layout {
@@ -959,6 +1001,7 @@ select:focus {
   .dashboard-layout,
   .summary-strip,
   .patient-brief,
+  .prompt-grid,
   .field-grid,
   .field-grid.three {
     grid-template-columns: 1fr;
@@ -989,7 +1032,8 @@ select:focus {
   }
 
   .item-top,
-  .panel-header {
+  .panel-header,
+  .prompt-card {
     align-items: stretch;
     flex-direction: column;
   }
