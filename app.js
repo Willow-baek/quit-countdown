@@ -242,7 +242,7 @@ function escapeHTML(value = "") {
 function normalizeTime(value) {
   if (!value) return "";
   const raw = String(value).trim().replace(/[Oo]/g, "0").replace("시", ":").replace(/\s/g, "");
-  const match = raw.match(/(\d{1,2})(?::?(\d{2}))?/);
+  const match = raw.match(/(\d{1,2})(?:[:=.ㆍ·-]?(\d{2}))?/);
   if (!match) return "";
   const hour = match[1].padStart(2, "0");
   const minute = (match[2] || "00").padStart(2, "0");
@@ -379,7 +379,7 @@ function parseScheduleText(text, date, sourceFile = "manual paste") {
 
   return lines
     .map((line) => {
-      const timeMatch = line.match(/(\d{1,2}[:시]\s?\d{0,2})/);
+      const timeMatch = line.match(/(\d{1,2}[:시=.ㆍ·-]\s?\d{0,2})/);
       const time = normalizeTime(timeMatch?.[1]);
       if (!time) return null;
 
@@ -434,6 +434,7 @@ function parseSmartCrmScheduleText(text, date, therapistName = "백한솔", sour
 function normalizeSmartCrmOcrText(text) {
   return String(text || "")
     .replace(/\r/g, "\n")
+    .replace(/[＝]/g, "=")
     .replace(/[［【]/g, "[")
     .replace(/[］】]/g, "]")
     .replace(/[（]/g, "(")
@@ -441,7 +442,7 @@ function normalizeSmartCrmOcrText(text) {
     .replace(/[：]/g, ":")
     .replace(/[|]+/g, " ")
     .replace(/\t/g, " ")
-    .replace(/([0O]?\d|1\d|2[0-3])\s*[:시]\s*([0-5O]\d|[0-5O])/g, (full, hour, minute) => {
+    .replace(/([0O]?\d|1\d|2[0-3])\s*[:시=.ㆍ·-]\s*([0-5O]\d|[0-5O])/g, (full, hour, minute) => {
       return `${hour.replace(/[Oo]/g, "0")}:${minute.replace(/[Oo]/g, "0").padStart(2, "0")}`;
     });
 }
@@ -563,7 +564,7 @@ function splitSmartCrmAppointmentSegments(text) {
 }
 
 function findSmartCrmTimeMatches(text) {
-  return [...String(text || "").matchAll(/(?:오전|오후)?\s*([0O]?\d|1\d|2[0-3])\s*[:시]\s*([0-5O]\d|[0-5O])/g)];
+  return [...String(text || "").matchAll(/(?:오전|오후)?\s*([0O]?\d|1\d|2[0-3])\s*[:시=.ㆍ·-]\s*([0-5O]\d|[0-5O])/g)];
 }
 
 function inferSmartCrmPatientName(segment, therapistName) {
@@ -596,7 +597,7 @@ function inferSmartCrmPatientName(segment, therapistName) {
   ]);
 
   const cleaned = String(segment || "")
-    .replace(/(?:오전|오후)?\s*([0O]?\d|1\d|2[0-3])\s*[:시]\s*([0-5O]\d|[0-5O])/g, " ")
+    .replace(/(?:오전|오후)?\s*([0O]?\d|1\d|2[0-3])\s*[:시=.ㆍ·-]\s*([0-5O]\d|[0-5O])/g, " ")
     .replace(/\[[^\]]*]/g, " ")
     .replace(/\([^)]*\)/g, " ")
     .replace(therapistName || "", " ")
@@ -606,7 +607,7 @@ function inferSmartCrmPatientName(segment, therapistName) {
     .replace(/\s+/g, " ")
     .trim();
 
-  const parts = cleaned.split(" ").map((part) => part.replace(/님$/, "")).filter(Boolean);
+  const parts = cleaned.split(" ").map((part) => part.replace(/[님닝]+$/, "")).filter(Boolean);
   return parts.find((part) => {
     if (stopWords.has(part)) return false;
     if (part.length < 2 || part.length > 8) return false;
@@ -690,7 +691,7 @@ function normalizeKoreanTime(value) {
   const isPM = value.includes("오후");
   const isAM = value.includes("오전");
   const normalized = String(value).replace(/[Oo]/g, "0");
-  const match = normalized.match(/(\d{1,2})[:시]\s?(\d{0,2})/);
+  const match = normalized.match(/(\d{1,2})[:시=.ㆍ·-]\s?(\d{0,2})/);
   if (!match) return "";
   let hour = Number(match[1]);
   const minute = (match[2] || "00").padStart(2, "0");
@@ -701,20 +702,20 @@ function normalizeKoreanTime(value) {
 
 function inferSchedulePatientName(segment, therapistName) {
   const cleaned = segment
-    .replace(/(?:오전|오후)?\s*\d{1,2}[:시]\s?\d{0,2}/g, " ")
+    .replace(/(?:오전|오후)?\s*\d{1,2}[:시=.ㆍ·-]\s?\d{0,2}/g, " ")
     .replace(therapistName || "", " ")
-    .replace(/초진|신규|재진|예약|치료|도수|물리치료|완료|내원|취소|대기|남|여|\d+세/gi, " ")
+    .replace(/초진|신규|재진|예약|치료|도수|물리치료|완료|내원|취소|대기|남|여|\d+세|님|닝/gi, " ")
     .replace(/[()[\]{}.,/\\|]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
   const parts = cleaned.split(" ").filter(Boolean);
-  return parts.find((part) => /^[가-힣A-Za-z]{2,12}(?:OO|님)?$/.test(part))?.replace("님", "") || "";
+  return parts.find((part) => /^[가-힣A-Za-z]{2,12}(?:OO|님|닝)?$/.test(part))?.replace(/[님닝]+$/, "") || "";
 }
 
 function parseTranscriptMeta(text, fileName, recordedDate, recordedTime) {
   const firstLine = (text || "").split(/\n/).find(Boolean) || "";
   const correctedText = applyTerms(text || "");
-  const timeHint = normalizeTime(firstLine.match(/(\d{1,2}[:시]\s?\d{0,2})/)?.[1]) || recordedTime;
+  const timeHint = normalizeTime(firstLine.match(/(\d{1,2}[:시=.ㆍ·-]\s?\d{0,2})/)?.[1]) || recordedTime;
   const visitType = /초진|신규/i.test(firstLine) ? "초진" : "재진";
   const nameMatch = firstLine.match(/([가-힣A-Za-z]{1,12}(?:OO|님)?)/);
   const patientHint = nameMatch?.[1]?.replace("님", "") || "";
@@ -1011,7 +1012,7 @@ function renderWorkflowImportLanes() {
 
 function renderImportLane(lane) {
   const isSchedule = lane.kind === "schedule";
-  const defaultStatus = isSchedule ? "Smart CRM · 여러 장 붙여넣기" : "초진 차트 · Ctrl/Cmd+V";
+  const defaultStatus = isSchedule ? "Smart CRM · 여러 장 붙여넣기" : "초진 차트 · 후보 정리";
   const placeholder = isSchedule ? "여러 장 붙여넣기" : "여기에 붙여넣기";
   return `
     <article class="paste-lane" data-lane="${lane.key}" tabindex="0" aria-label="${escapeHTML(lane.title)} 붙여넣기">
@@ -1966,7 +1967,8 @@ async function runLaneOcr(laneKey) {
   }
 
   try {
-    const result = await window.Tesseract.recognize(lane.imagePreview, "kor+eng", {
+    const ocrSource = await prepareLaneOcrSource(lane);
+    const result = await window.Tesseract.recognize(ocrSource.src, "kor+eng", {
       logger: (message) => {
         if (message.status === "recognizing text" && typeof message.progress === "number") {
           lane.ocrStatus = `OCR ${Math.round(message.progress * 100)}%`;
@@ -1977,8 +1979,10 @@ async function runLaneOcr(laneKey) {
     const rawText = result?.data?.text?.trim() || "";
     const text =
       lane.kind === "schedule"
-        ? (await buildSmartCrmTaggedOcrText(lane.imagePreview, result?.data)) || rawText
-        : rawText;
+        ? (await buildSmartCrmTaggedOcrText(lane.imagePreview, result?.data, ocrSource.scale)) || rawText
+        : lane.kind === "doctor_chart"
+          ? await buildDoctorChartReviewText(lane.imagePreview, result?.data, rawText)
+          : rawText;
     if (!text) {
       lane.ocrStatus = "OCR 결과 없음. 텍스트를 붙여넣어 주세요.";
       render();
@@ -1992,6 +1996,11 @@ async function runLaneOcr(laneKey) {
       render();
       return;
     }
+    if (lane.kind === "doctor_chart") {
+      lane.ocrStatus = "OCR 후보 정리 완료 · 확인 후 반영";
+      render();
+      return;
+    }
     lane.ocrStatus = "OCR 완료, 자동 반영 중";
     render();
     processImportLane(laneKey, { auto: true });
@@ -2002,7 +2011,52 @@ async function runLaneOcr(laneKey) {
   }
 }
 
-async function buildSmartCrmTaggedOcrText(imageSrc, ocrData) {
+async function prepareLaneOcrSource(lane) {
+  if (lane.kind === "schedule") {
+    return preprocessScheduleImageForOcr(lane.imagePreview);
+  }
+  return { src: lane.imagePreview, scale: 1 };
+}
+
+async function preprocessScheduleImageForOcr(imageSrc) {
+  if (!imageSrc) return { src: imageSrc, scale: 1 };
+
+  try {
+    const image = await loadImageElement(imageSrc);
+    const scale = 2.4;
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round((image.naturalWidth || image.width) * scale);
+    canvas.height = Math.round((image.naturalHeight || image.height) * scale);
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (!context) return { src: imageSrc, scale: 1 };
+    context.imageSmoothingEnabled = false;
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+    const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+    const data = imageData.data;
+    for (let index = 0; index < data.length; index += 4) {
+      const red = data[index];
+      const green = data[index + 1];
+      const blue = data[index + 2];
+      const gray = red * 0.299 + green * 0.587 + blue * 0.114;
+      const max = Math.max(red, green, blue);
+      const min = Math.min(red, green, blue);
+      const contrast = max - min;
+      const isText = gray < 128 || (gray < 170 && contrast < 45);
+      const value = isText ? 0 : 255;
+      data[index] = value;
+      data[index + 1] = value;
+      data[index + 2] = value;
+      data[index + 3] = 255;
+    }
+    context.putImageData(imageData, 0, 0);
+    return { src: canvas.toDataURL("image/png"), scale };
+  } catch {
+    return { src: imageSrc, scale: 1 };
+  }
+}
+
+async function buildSmartCrmTaggedOcrText(imageSrc, ocrData, ocrScale = 1) {
   const lines = collectOcrLines(ocrData);
   if (!imageSrc || !lines.length) return "";
 
@@ -2019,7 +2073,7 @@ async function buildSmartCrmTaggedOcrText(imageSrc, ocrData) {
       .map((line) => {
         const text = line.text.trim();
         if (!text) return "";
-        const status = classifySmartCrmLineStatus(context, line);
+        const status = classifySmartCrmLineStatus(context, line, ocrScale);
         return status ? `${text} [상태:${status}]` : text;
       })
       .filter(Boolean)
@@ -2138,12 +2192,21 @@ function centerOfBox(box) {
   };
 }
 
-function classifySmartCrmLineStatus(context, line) {
+function classifySmartCrmLineStatus(context, line, ocrScale = 1) {
   const timeWord = (line.words || []).find((word) => findSmartCrmTimeMatches(getOcrEntityText(word)).length);
   if (!timeWord) return "";
-  const box = normalizeOcrBbox(timeWord.bbox || line.bbox);
+  const box = scaleOcrBox(normalizeOcrBbox(timeWord.bbox || line.bbox), 1 / (ocrScale || 1));
   const color = sampleSmartCrmBackground(context, box);
   return classifySmartCrmColor(color);
+}
+
+function scaleOcrBox(box, factor) {
+  return {
+    x0: box.x0 * factor,
+    y0: box.y0 * factor,
+    x1: box.x1 * factor,
+    y1: box.y1 * factor,
+  };
 }
 
 function sampleSmartCrmBackground(context, box) {
@@ -2200,6 +2263,168 @@ function loadImageElement(src) {
     image.onerror = reject;
     image.src = src;
   });
+}
+
+async function buildDoctorChartReviewText(imageSrc, ocrData, rawText) {
+  const lines = collectOcrLines(ocrData);
+  const zones = getDoctorChartZones();
+  const byZone = Object.fromEntries(zones.map((zone) => [zone.key, []]));
+  const pageBox = await estimateDoctorChartPageBox(imageSrc, lines);
+
+  lines.forEach((line) => {
+    const zone = findDoctorChartZone(line, zones, pageBox);
+    if (zone) byZone[zone.key].push(line);
+  });
+
+  const demographics = inferDoctorChartDemographics(lines, rawText);
+  const sections = [
+    "초진 차트 OCR 후보",
+    "확인 필요: 손글씨는 틀릴 수 있어서 아래 내용을 수정한 뒤 반영하세요.",
+    "",
+    "[기본정보]",
+    `환자번호: ${demographics.code || "?"}`,
+    `이름: ${demographics.name || "?"}`,
+    `나이/성별: ${demographics.ageSex || "?"}`,
+    `차트날짜: ${demographics.date || "?"}`,
+    "",
+    ...doctorChartZoneText("C/C · P/E & P/H", byZone.complaint),
+    "",
+    ...doctorChartZoneText("IMPRESSION", byZone.impression),
+    ...doctorChartCandidates(byZone.impression, "impression"),
+    "",
+    ...doctorChartZoneText("SUPINE / PRONE / POSTURE 수치", [
+      ...byZone.supine,
+      ...byZone.prone,
+      ...byZone.posture,
+      ...byZone.pelvis,
+    ]),
+    "",
+    ...doctorChartZoneText("POSTURE X-RAY", byZone.xray),
+    ...doctorChartCandidates(byZone.xray, "xray"),
+    "",
+    ...doctorChartZoneText("PRESCRIPT", byZone.prescript),
+    ...doctorChartCandidates(byZone.prescript, "prescript"),
+    "",
+    "[원문 OCR]",
+    (rawText || "").trim() || "(원문 없음)",
+  ];
+
+  return sections.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function getDoctorChartZones() {
+  return [
+    { key: "header", x0: 0, y0: 0, x1: 1, y1: 0.07 },
+    { key: "complaint", x0: 0, y0: 0.05, x1: 0.31, y1: 0.27 },
+    { key: "impression", x0: 0.29, y0: 0.05, x1: 0.61, y1: 0.27 },
+    { key: "xray", x0: 0.60, y0: 0.08, x1: 1, y1: 0.59 },
+    { key: "supine", x0: 0, y0: 0.26, x1: 0.61, y1: 0.36 },
+    { key: "prone", x0: 0, y0: 0.36, x1: 0.61, y1: 0.49 },
+    { key: "posture", x0: 0, y0: 0.49, x1: 0.61, y1: 0.58 },
+    { key: "pelvis", x0: 0, y0: 0.58, x1: 1, y1: 0.69 },
+    { key: "prescript", x0: 0, y0: 0.69, x1: 1, y1: 1 },
+  ];
+}
+
+function findDoctorChartZone(line, zones, pageBox) {
+  const center = centerOfBox(line.bbox);
+  const x = pageBox.width ? center.x / pageBox.width : 0;
+  const y = pageBox.height ? center.y / pageBox.height : 0;
+
+  return zones.find((zone) => {
+    return x >= zone.x0 && x <= zone.x1 && y >= zone.y0 && y <= zone.y1;
+  });
+}
+
+async function estimateDoctorChartPageBox(imageSrc, lines) {
+  if (imageSrc) {
+    try {
+      const image = await loadImageElement(imageSrc);
+      return {
+        width: image.naturalWidth || image.width || 1,
+        height: image.naturalHeight || image.height || 1,
+      };
+    } catch {
+      // Fall back to OCR bounds below.
+    }
+  }
+  const boxes = (lines || []).map((line) => line.bbox).filter((box) => box.x1 > box.x0 && box.y1 > box.y0);
+  if (!boxes.length) return { width: 1, height: 1 };
+  return {
+    width: Math.max(...boxes.map((box) => box.x1), 1),
+    height: Math.max(...boxes.map((box) => box.y1), 1),
+  };
+}
+
+function doctorChartZoneText(title, lines) {
+  const text = linesToDoctorChartText(lines);
+  return [`[${title}]`, text || "?"];
+}
+
+function linesToDoctorChartText(lines) {
+  return [...(lines || [])]
+    .sort((a, b) => a.bbox.y0 - b.bbox.y0 || a.bbox.x0 - b.bbox.x0)
+    .map((line) => line.text.trim())
+    .filter((text) => text && !isDoctorChartPrintedLabel(text))
+    .join("\n")
+    .trim();
+}
+
+function isDoctorChartPrintedLabel(text) {
+  return /^(C\/C|P\/E|P\/H|IMPRESSION|POSTURE X-?RAY|SUPINE|PRONE|POSTURE|PRESCRIPT|LEFT|RIGHT|Left|Right|Tibia|Dorsiflexion|Hip|Pelvis|Tilting|Rotation|Elevation|Tr(?:a|ans)malleolar|Knee|Forefoot|R,C,S,P|CM|S|T|L|C|Lt|Rt)$/i.test(
+    String(text || "").trim(),
+  );
+}
+
+function doctorChartCandidates(lines, zone) {
+  const text = linesToDoctorChartText(lines);
+  const candidates = inferDoctorChartCandidates(text, zone);
+  if (!candidates.length) return [];
+  return ["후보: " + candidates.join(", ")];
+}
+
+function inferDoctorChartCandidates(text, zone) {
+  const normalized = String(text || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) return [];
+
+  const rules = [
+    [/TRM|T?RM|티알엠/i, "TRM"],
+    [/MPT|NPT|엠피티/i, "MPT"],
+    [/FMP|FNP|FMT|F\/?U|에프엠/i, "FMP/FU"],
+    [/LLD|LDD|leg length/i, "LLD"],
+    [/unremark|unremarkable|wnl/i, "unremarkable"],
+    [/gait|gate|보행/i, "gait"],
+    [/insole|insert|깔창/i, "insole"],
+    [/outlet|outflare|inlet|pelvis/i, "pelvis alignment"],
+    [/ankle|dorsi|DF|plantar/i, "ankle ROM"],
+    [/knee|무릎/i, "knee"],
+    [/hip|고관절/i, "hip"],
+  ];
+
+  const result = rules.filter(([pattern]) => pattern.test(normalized)).map(([, label]) => label);
+  if (zone === "prescript" && !result.length) {
+    result.push("TRM", "MPT", "FMP/FU");
+  }
+  return [...new Set(result)];
+}
+
+function inferDoctorChartDemographics(lines, rawText) {
+  const allText = [rawText, ...lines.map((line) => line.text)].join("\n");
+  const code = allText.match(/\b\d{4,7}\b/)?.[0] || "";
+  const date = allText.match(/\b20\d{6}\b/)?.[0] || "";
+  const age = allText.match(/\b(?:[1-9]\d?|1[01]\d)\b/)?.[0] || "";
+  const koreanNames = [...allText.matchAll(/[가-힣]{2,4}/g)]
+    .map((match) => match[0])
+    .filter((word) => !/차트|등록|일자|처방|기타|추가|신발|도수|운동|자세|교육|교정|저항|골반|고관절|무릎|방문|진료/.test(word));
+
+  return {
+    code,
+    name: koreanNames[0] || "",
+    ageSex: age,
+    date,
+  };
 }
 
 function captureLearningSelection() {
