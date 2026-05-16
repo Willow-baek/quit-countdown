@@ -18,6 +18,7 @@
   --shadow: 0 4px 16px rgba(0, 0, 0, 0.05);
   --sidebar-width: 52px;
   --sidebar-expanded-width: 320px;
+  --calendar-row-height: 76px;
 }
 
 * {
@@ -1224,6 +1225,7 @@ select:focus {
 .calendar-row {
   display: grid;
   grid-template-columns: 72px repeat(3, minmax(190px, 1fr));
+  height: var(--calendar-row-height);
 }
 
 .calendar-header {
@@ -1301,7 +1303,10 @@ select:focus {
 }
 
 .calendar-cell {
-  min-height: 58px;
+  position: relative;
+  min-height: 0;
+  height: var(--calendar-row-height);
+  overflow: visible;
   padding: 5px;
   background: #fff;
 }
@@ -1317,23 +1322,17 @@ select:focus {
 .split-calendar-cell {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 5px;
+  gap: 8px;
 }
 
 .calendar-lane {
   min-width: 0;
+  overflow: visible;
 }
 
 .visit-lane {
   border-left: 1px dashed var(--line);
-  padding-left: 5px;
-}
-
-.lane-mini-label {
-  color: var(--muted);
-  font-size: 10px;
-  font-weight: 900;
-  margin-bottom: 4px;
+  padding-left: 8px;
 }
 
 .calendar-cell:empty {
@@ -1345,6 +1344,7 @@ select:focus {
 .appointment-button {
   width: 100%;
   display: grid;
+  align-content: start;
   gap: 2px;
   grid-template-rows: auto auto auto;
   border: 1px solid var(--line);
@@ -1352,9 +1352,14 @@ select:focus {
   border-radius: 8px;
   background: #fafaf8;
   color: var(--ink);
+  height: max(42px, calc((var(--duration-slots, 1) * var(--calendar-row-height)) - 10px));
+  margin-top: calc(var(--start-offset-slots, 0) * var(--calendar-row-height));
   padding: 7px 8px;
+  position: relative;
+  z-index: 3;
   text-align: left;
   white-space: normal;
+  overflow: hidden;
 }
 
 .appointment-button + .appointment-button {
@@ -1376,29 +1381,37 @@ select:focus {
 }
 
 .appointment-button.appointment-record {
-  background: #fafaf8;
+  background: #f0f2d5;
+  border-color: #d5d9aa;
+  border-left-color: #737737;
 }
 
 .appointment-button.visit-record {
-  border-left-color: #537ea3;
-  background: #f7f9fd;
+  border-color: #ded8cd;
+  border-left-color: #918779;
+  background: #f3f0ea;
 }
 
 .appointment-button.visit-record:hover,
 .appointment-button.visit-record.selected {
-  background: #eef4fb;
+  background: #e9e4dc;
+}
+
+.appointment-button.appointment-record:hover,
+.appointment-button.appointment-record.selected {
+  background: #e5e8bd;
 }
 
 .appointment-button.duration-30 {
-  min-height: 42px;
+  min-height: 0;
 }
 
 .appointment-button.duration-40 {
-  min-height: 56px;
+  min-height: 0;
 }
 
 .appointment-button.duration-60 {
-  min-height: 82px;
+  min-height: 0;
 }
 
 .appointment-button.duration-unknown {

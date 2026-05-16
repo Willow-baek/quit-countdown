@@ -2112,11 +2112,9 @@ function renderCalendarCell(appointments, visits, mode, isOffDay = false) {
   return `
     <div class="calendar-cell split-calendar-cell ${offDayClass}">
       <div class="calendar-lane appointment-lane">
-        ${appointments.length ? `<div class="lane-mini-label">A</div>` : ""}
         ${appointments.map((item) => renderCalendarRecord(item, "appointment")).join("")}
       </div>
       <div class="calendar-lane visit-lane">
-        ${visits.length ? `<div class="lane-mini-label">V</div>` : ""}
         ${visits.map((item) => renderCalendarRecord(item, "visit")).join("")}
       </div>
     </div>
@@ -2127,6 +2125,8 @@ function renderCalendarRecord(item, kind) {
   const patient = kind === "visit" ? getVisitPatient(item) : getAppointmentPatient(item);
   const durationClass = getScheduleDurationClass(item);
   const durationLabel = getScheduleDurationMinutes(item);
+  const durationSlots = getScheduleDurationSlots(item);
+  const startOffsetSlots = getScheduleStartOffsetSlots(item.time);
   const name = kind === "visit" ? getVisitPatientName(item) : item.patientName || item.patientNameText || "환자 확인";
   const typeLabel = kind === "visit" ? "Visit" : "Appointment";
   const statusLabel =
@@ -2136,7 +2136,7 @@ function renderCalendarRecord(item, kind) {
   const patientCode = patient?.code || patient?.chartNumber || item.patientCode || item.visitType || "";
   const tooltip = `${item.time} ${name}\n${typeLabel}${durationLabel ? ` · ${durationLabel}분` : ""}${patientCode ? ` · ${patientCode}` : ""}\n${statusLabel}`;
   return `
-    <button class="appointment-button ${kind === "visit" ? "visit-record" : "appointment-record"} ${item.id === selectedScheduleId && selectedCalendarKind === kind ? "selected" : ""} ${item.visitType === "초진" ? "initial" : "followup"} ${durationClass}" data-action="select-calendar-record" data-kind="${kind}" data-id="${item.id}" title="${escapeHTML(tooltip)}">
+    <button class="appointment-button ${kind === "visit" ? "visit-record" : "appointment-record"} ${item.id === selectedScheduleId && selectedCalendarKind === kind ? "selected" : ""} ${item.visitType === "초진" ? "initial" : "followup"} ${durationClass}" data-action="select-calendar-record" data-kind="${kind}" data-id="${item.id}" title="${escapeHTML(tooltip)}" style="--duration-slots: ${durationSlots}; --start-offset-slots: ${startOffsetSlots};">
       <span class="appointment-time">${escapeHTML(item.time)}</span>
       <span class="appointment-name">${escapeHTML(name)}</span>
       <small class="appointment-duration">${escapeHTML(durationLabel ? `${durationLabel}분` : "시간 ?")}</small>
@@ -2158,6 +2158,18 @@ function getScheduleDurationClass(item) {
   if (duration >= 38) return "duration-40";
   if (duration >= 25) return "duration-30";
   return "duration-unknown";
+}
+
+function getScheduleDurationSlots(item) {
+  const duration = getScheduleDurationMinutes(item) || 30;
+  return Math.max(0.6, Math.min(4, duration / 30)).toFixed(2);
+}
+
+function getScheduleStartOffsetSlots(time) {
+  const minutes = minutesOf(time);
+  if (minutes === null) return "0";
+  const offset = ((minutes % 30) + 30) % 30;
+  return (offset / 30).toFixed(2);
 }
 
 function saveCalendarRecordQuickEdit(kind, id) {
