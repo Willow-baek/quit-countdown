@@ -135,6 +135,7 @@ let importLanes = {
   doctorChart: makeImportLane("doctorChart"),
 };
 let gptWindow = null;
+let aiWorkspaceWindow = null;
 let isGptOpen = false;
 let learningDraft = {
   from: "",
@@ -3478,6 +3479,13 @@ async function copyExternalPrompt(promptId) {
 }
 
 function openChatGPTWindow() {
+  const layout = getAIWorkspaceLayout();
+  if (!isAIWorkspaceMode()) {
+    openChatGPTPopup(layout);
+    openAIWorkspaceWindow(layout);
+    return;
+  }
+
   setChatGPTWorkflowOpen(true);
   if (isGptOpen) {
     focusGPTWindow();
@@ -3485,53 +3493,87 @@ function openChatGPTWindow() {
     return;
   }
 
-  const geometry = getChatGPTPopupGeometry();
-  gptWindow = window.open(
-    "https://chatgpt.com/",
-    "clinicalMemoryChatGPT",
-    `popup=yes,width=${geometry.width},height=${geometry.height},left=${geometry.left},top=${geometry.top},resizable=yes,scrollbars=yes`,
-  );
-  if (gptWindow) {
-    isGptOpen = true;
-    focusGPTWindow();
-    toast("ChatGPT 창을 열었습니다.");
-  } else {
-    toast("팝업이 막혔어요. 브라우저 팝업 허용 후 다시 눌러주세요.");
-  }
+  openChatGPTPopup(layout);
 }
 
 function setChatGPTWorkflowOpen(isOpen) {
   document.body.classList.toggle("chatgpt-workflow-open", isOpen);
 }
 
-function getChatGPTPopupGeometry() {
+function isAIWorkspaceMode() {
+  return new URLSearchParams(window.location.search).get("aiWorkspace") === "1";
+}
+
+function getAIWorkspaceLayout() {
   const styles = getComputedStyle(document.documentElement);
   const configuredWidth = parseInt(styles.getPropertyValue("--sidebar-expanded-width"), 10);
-  const width = Number.isFinite(configuredWidth) ? configuredWidth : 320;
-  const screenLeft = window.screenX ?? window.screenLeft ?? 0;
-  const screenTop = window.screenY ?? window.screenTop ?? 0;
-  const height = Math.round(window.outerHeight || window.screen.availHeight || 900);
-  let left = Math.round(screenLeft - width);
-  const top = Math.round(screenTop);
-
-  if (left < 0) {
-    left = 0;
-    try {
-      window.moveTo(width, screenTop);
-    } catch {
-      // Some browsers ignore moving a tab that was not opened by script.
-    }
-  }
+  const gptWidth = Number.isFinite(configuredWidth) ? configuredWidth : 320;
+  const availLeft = typeof window.screen.availLeft === "number" ? window.screen.availLeft : 0;
+  const availTop = typeof window.screen.availTop === "number" ? window.screen.availTop : 0;
+  const availWidth = window.screen.availWidth || window.outerWidth || 1280;
+  const availHeight = window.screen.availHeight || window.outerHeight || 900;
+  const appLeft = availLeft + gptWidth;
+  const appWidth = Math.max(640, availWidth - gptWidth);
 
   return {
-    left,
-    top,
-    width,
-    height,
+    gpt: {
+      left: availLeft,
+      top: availTop,
+      width: gptWidth,
+      height: availHeight,
+    },
+    app: {
+      left: appLeft,
+      top: availTop,
+      width: appWidth,
+      height: availHeight,
+    },
   };
 }
 
+function windowFeatures(rect) {
+  return `popup=yes,width=${Math.round(rect.width)},height=${Math.round(rect.height)},left=${Math.round(rect.left)},top=${Math.round(rect.top)},resizable=yes,scrollbars=yes`;
+}
+
+function getAIWorkspaceURL() {
+  const url = new URL(window.location.href);
+  url.searchParams.set("aiWorkspace", "1");
+  url.searchParams.set("gptOpen", "1");
+  return url.toString();
+}
+
+function openChatGPTPopup(layout = getAIWorkspaceLayout()) {
+  gptWindow = window.open("https://chatgpt.com/", "clinicalMemoryChatGPT", windowFeatures(layout.gpt));
+  if (gptWindow) {
+    isGptOpen = true;
+    focusGPTWindow();
+    toast("ChatGPT 창을 열었습니다.");
+  } else {
+    toast("ChatGPT 팝업이 막혔어요. 브라우저 팝업 허용 후 다시 눌러주세요.");
+  }
+  return gptWindow;
+}
+
+function openAIWorkspaceWindow(layout = getAIWorkspaceLayout()) {
+  aiWorkspaceWindow = window.open(getAIWorkspaceURL(), "clinicalMemoryAIWorkspace", windowFeatures(layout.app));
+  if (aiWorkspaceWindow) {
+    try {
+      aiWorkspaceWindow.focus();
+    } catch {
+      // Browser focus policy can ignore this.
+    }
+    toast("AI Workspace를 열었습니다.");
+  } else {
+    toast("AI Workspace 팝업이 막혔어요. 브라우저 팝업 허용 후 다시 눌러주세요.");
+  }
+  return aiWorkspaceWindow;
+}
+
 function focusGPTWindow() {
+  if (!gptWindow && isAIWorkspaceMode() && window.opener) {
+    window.opener.postMessage({ type: "CMA_FOCUS_GPT" }, "*");
+    return true;
+  }
   if (!gptWindow) return false;
   try {
     gptWindow.focus();
@@ -3558,6 +3600,17 @@ function handleFocusChatGPTWindow() {
 function closeChatGPTSidebar() {
   isGptOpen = false;
   setChatGPTWorkflowOpen(false);
+}
+
+function hydrateAIWorkspaceMode() {
+  if (!isAIWorkspaceMode()) return;
+  setChatGPTWorkflowOpen(true);
+  isGptOpen = new URLSearchParams(window.location.search).get("gptOpen") === "1";
+}
+
+function handleAIWorkspaceMessage(event) {
+  if (event.data?.type !== "CMA_FOCUS_GPT") return;
+  focusGPTWindow();
 }
 
 function processAIWorkflowResult() {
@@ -4267,6 +4320,8 @@ async function importData(event) {
 
 attachEvents();
 setView("dashboard");
+hydrateAIWorkspaceMode();
+window.addEventListener("message", handleAIWorkspaceMessage);
 
 window.setTimeout(() => {
   if (supabaseSession?.access_token) {
