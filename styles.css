@@ -1346,7 +1346,7 @@ select:focus {
   display: grid;
   align-content: start;
   gap: 2px;
-  grid-template-rows: auto auto auto;
+  grid-template-rows: auto auto;
   border: 1px solid var(--line);
   border-left: 4px solid var(--accent);
   border-radius: 8px;
@@ -1418,12 +1418,20 @@ select:focus {
   min-height: 0;
 }
 
+.appointment-title,
 .appointment-time,
 .appointment-name,
 .appointment-duration {
-  display: block;
   min-width: 0;
   max-width: 100%;
+}
+
+.appointment-title {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  overflow: hidden;
+  white-space: nowrap;
 }
 
 .appointment-time {
@@ -1432,6 +1440,7 @@ select:focus {
   font-weight: 800;
   line-height: 1.15;
   white-space: nowrap;
+  flex: 0 0 auto;
 }
 
 .appointment-name {
@@ -1442,9 +1451,11 @@ select:focus {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex: 1 1 auto;
 }
 
 .appointment-duration {
+  display: block;
   color: var(--muted);
   font-size: 11px;
   font-weight: 700;

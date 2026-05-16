@@ -2184,8 +2184,10 @@ function renderCalendarRecord(item, kind) {
   const tooltip = `${item.time} ${name}\n${typeLabel}${durationLabel ? ` · ${durationLabel}분` : ""}${patientCode ? ` · ${patientCode}` : ""}\n${statusLabel}`;
   return `
     <button class="appointment-button ${kind === "visit" ? "visit-record" : "appointment-record"} ${item.id === selectedScheduleId && selectedCalendarKind === kind ? "selected" : ""} ${item.visitType === "초진" ? "initial" : "followup"} ${durationClass}" data-action="select-calendar-record" data-kind="${kind}" data-id="${item.id}" title="${escapeHTML(tooltip)}" style="--duration-slots: ${durationSlots}; --start-offset-slots: ${startOffsetSlots};">
-      <span class="appointment-time">${escapeHTML(item.time)}</span>
-      <span class="appointment-name">${escapeHTML(name)}</span>
+      <span class="appointment-title">
+        <span class="appointment-time">${escapeHTML(item.time)}</span>
+        <span class="appointment-name">${escapeHTML(name)}</span>
+      </span>
       <small class="appointment-duration">${escapeHTML(durationLabel ? `${durationLabel}분` : "시간 ?")}</small>
     </button>
   `;
