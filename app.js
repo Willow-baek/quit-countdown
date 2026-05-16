@@ -770,6 +770,8 @@ function scheduleCandidateToItem(candidate) {
     matchedVisitId: null,
     status: "scheduled",
     matchStatus: "unlinked",
+    needsReview: Boolean(candidate.needsReview),
+    reviewReason: candidate.reviewReason || "",
   };
 }
 
@@ -1297,21 +1299,7 @@ function confirmScheduleCandidate(id) {
     return;
   }
 
-  const scheduleItem = scheduleCandidateToItem(candidate);
-  const patientLink = resolvePatientLink(scheduleItem.patientName, scheduleItem.patientCode, { createIfMissing: false });
-  scheduleItem.patientId = patientLink.patient?.id || null;
-  scheduleItem.needsReview = patientLink.needsReview && patientLink.reason === "동명이인 확인 필요";
-  scheduleItem.reviewReason = scheduleItem.needsReview ? patientLink.reason : "";
-  setAppointments([
-    scheduleItem,
-    ...getAppointments().filter((item) => {
-      return !(
-        item.date === scheduleItem.date &&
-        item.time === scheduleItem.time &&
-        item.sourceFile === scheduleItem.sourceFile
-      );
-    }),
-  ]);
+  const scheduleItem = upsertAppointmentFromScheduleCandidate(candidate);
   candidate.status = "imported";
   candidate.needsReview = false;
   candidate.matchedScheduleId = scheduleItem.id;
@@ -1325,6 +1313,53 @@ function confirmScheduleCandidate(id) {
   render();
 }
 
+function importScheduleCandidate(candidate) {
+  if (candidate.targetRecordType === "visit") {
+    const visit = upsertVisitFromScheduleCandidate(candidate);
+    candidate.status = "imported";
+    candidate.matchedVisitId = visit.id;
+    return { kind: "visit", item: visit, needsReview: Boolean(visit.needsReview || candidate.needsReview) };
+  }
+
+  const appointment = upsertAppointmentFromScheduleCandidate(candidate);
+  candidate.status = "imported";
+  candidate.matchedScheduleId = appointment.id;
+  candidate.appointmentId = appointment.id;
+  return { kind: "appointment", item: appointment, needsReview: Boolean(appointment.needsReview || candidate.needsReview) };
+}
+
+function upsertAppointmentFromScheduleCandidate(candidate) {
+  const scheduleItem = scheduleCandidateToItem(candidate);
+  const patientLink = scheduleItem.patientName
+    ? resolvePatientLink(scheduleItem.patientName, scheduleItem.patientCode, { createIfMissing: false })
+    : { patient: null, needsReview: true, reason: "환자명 확인" };
+  const reviewReasons = [
+    candidate.needsReview ? candidate.reviewReason : "",
+    patientLink.needsReview && patientLink.reason === "동명이인 확인 필요" ? patientLink.reason : "",
+    !scheduleItem.patientName ? "환자명 확인" : "",
+    !scheduleItem.durationMinutes ? "치료시간 확인" : "",
+  ].filter(Boolean);
+  scheduleItem.patientId = patientLink.patient?.id || null;
+  scheduleItem.needsReview = reviewReasons.length > 0;
+  scheduleItem.reviewReason = [...new Set(reviewReasons)].join(", ");
+
+  setAppointments([
+    scheduleItem,
+    ...getAppointments().filter((item) => !isSameImportedAppointment(item, scheduleItem)),
+  ]);
+  return scheduleItem;
+}
+
+function isSameImportedAppointment(existing, incoming) {
+  if (!existing || !incoming) return false;
+  if (existing.id === incoming.id) return true;
+  if (existing.date !== incoming.date || existing.time !== incoming.time) return false;
+  const existingName = normalizeNameForMatch(existing.patientName || existing.patientNameText);
+  const incomingName = normalizeNameForMatch(incoming.patientName || incoming.patientNameText);
+  if (existingName && incomingName) return existingName === incomingName;
+  return existing.sourceFile === incoming.sourceFile;
+}
+
 function discardScheduleCandidate(id) {
   const candidate = state.rawInbox.find((entry) => entry.id === id && entry.type === "schedule_candidate");
   if (!candidate) return;
@@ -1336,12 +1371,20 @@ function discardScheduleCandidate(id) {
 
 function upsertVisitFromScheduleCandidate(candidate) {
   const patientName = candidate.patientHint || "환자 확인";
-  const patientLink = resolvePatientLink(patientName, candidate.chartNumber || "", { createIfMissing: true });
+  const patientLink = candidate.patientHint
+    ? resolvePatientLink(patientName, candidate.chartNumber || "", { createIfMissing: true })
+    : { patient: null, needsReview: true, reason: "환자명 확인" };
   const appointment = findAppointmentForVisitCandidate(candidate, patientLink.patient);
   const existing = findExistingVisitForScheduleCandidate(candidate, patientLink.patient);
   const baseVisit = existing || {};
   const patientId = patientLink.needsReview && !patientLink.patient ? null : patientLink.patient?.id || baseVisit.patientId || null;
-  const needsReview = Boolean(patientLink.needsReview && patientLink.reason === "동명이인 확인 필요");
+  const reviewReasons = [
+    candidate.needsReview ? candidate.reviewReason : "",
+    patientLink.needsReview ? patientLink.reason : "",
+    !candidate.patientHint ? "환자명 확인" : "",
+    !candidate.durationMinutes ? "치료시간 확인" : "",
+  ].filter(Boolean);
+  const needsReview = reviewReasons.length > 0;
 
   const visit = normalizeVisitRecord({
     ...baseVisit,
@@ -1370,7 +1413,7 @@ function upsertVisitFromScheduleCandidate(candidate) {
     confirmed: Boolean(baseVisit.confirmed),
     matchStatus: "confirmed",
     needsReview,
-    reviewReason: needsReview ? patientLink.reason : baseVisit.reviewReason || "",
+    reviewReason: needsReview ? [...new Set(reviewReasons)].join(", ") : baseVisit.reviewReason || "",
     createdAt: baseVisit.createdAt || new Date().toISOString(),
   });
 
@@ -1416,6 +1459,7 @@ function findExistingVisitForScheduleCandidate(candidate, patient) {
         ? Math.abs(visitMinutes - targetMinutes) <= 10
         : visit.time === candidate.recordedTime;
     if (!timeClose) return false;
+    if (visit.sourceFile === candidate.sourceFile) return true;
     if (patient?.id && visit.patientId === patient.id) return true;
     return normalizeNameForMatch(getVisitPatientName(visit)) === normalizeNameForMatch(candidate.patientHint);
   });
@@ -2016,6 +2060,51 @@ function getScheduleDurationClass(item) {
   return "duration-unknown";
 }
 
+function saveCalendarRecordQuickEdit(kind, id) {
+  const recordInfo = findCalendarRecord(kind, id);
+  if (!recordInfo?.item) return;
+  const record = recordInfo.item;
+  const time = normalizeKoreanTime(document.getElementById(`quickTime-${id}`)?.value || "");
+  const name = document.getElementById(`quickName-${id}`)?.value.trim() || "";
+  const duration = normalizeTreatmentMinutes(document.getElementById(`quickDuration-${id}`)?.value || "");
+  const reviewReasons = [
+    !time ? "시간 확인" : "",
+    !name ? "환자명 확인" : "",
+    !duration ? "치료시간 확인" : "",
+  ].filter(Boolean);
+
+  if (time) record.time = time;
+  record.durationMinutes = duration || "";
+  record.note = duration ? `${duration}분` : record.note || "";
+
+  if (recordInfo.kind === "visit") {
+    const currentPatient = getVisitPatient(record);
+    const nameChanged = normalizeNameForMatch(currentPatient?.name || record.patientNameText) !== normalizeNameForMatch(name);
+    record.patientNameText = name || record.patientNameText || "환자 확인";
+    if (nameChanged) {
+      const matchedPatient = findPatientByNameOrCode(name, "");
+      record.patientId = matchedPatient?.id || null;
+      if (!matchedPatient) reviewReasons.push("환자 연결 확인");
+    }
+    selectedVisitId = record.id;
+  } else {
+    record.patientName = name || record.patientName || "환자 확인";
+    record.patientNameText = record.patientName;
+    const matchedPatient = findPatientByNameOrCode(record.patientName, record.patientCode || record.chartNumber || "");
+    record.patientId = matchedPatient?.id || null;
+    if (!matchedPatient) reviewReasons.push("환자 연결 확인");
+  }
+
+  record.needsReview = reviewReasons.length > 0;
+  record.reviewReason = [...new Set(reviewReasons)].join(", ");
+  selectedCalendarKind = recordInfo.kind;
+  selectedScheduleId = record.id;
+  dashboardWeekStart = getWeekStartISO(record.date || todayISO());
+  saveState();
+  toast("Schedule block updated.");
+  render();
+}
+
 function renderScheduleHistoryPanel(record, kind = "appointment") {
   if (!record) {
     return `
@@ -2054,6 +2143,7 @@ function renderScheduleHistoryPanel(record, kind = "appointment") {
         <span class="badge ${record.needsReview ? "warn" : record.visitType === "초진" ? "new" : "follow"}">${escapeHTML(record.needsReview ? record.reviewReason || "확인 필요" : patient?.code || patient?.chartNumber || "미등록")}</span>
       </div>
       <div class="panel-body">
+        ${renderCalendarRecordQuickEdit(record, kind)}
         ${
           patient
             ? `
@@ -2084,6 +2174,25 @@ function renderScheduleHistoryPanel(record, kind = "appointment") {
         }
       </div>
     </section>
+  `;
+}
+
+function renderCalendarRecordQuickEdit(record, kind) {
+  const displayName = kind === "visit" ? getVisitPatientName(record) : record.patientName || record.patientNameText || "";
+  const duration = getScheduleDurationMinutes(record);
+  return `
+    <div class="quick-record-edit" data-kind="${escapeHTML(kind)}" data-id="${escapeHTML(record.id)}">
+      <label>Time
+        <input id="quickTime-${record.id}" value="${escapeHTML(record.time || "")}" placeholder="09:00" />
+      </label>
+      <label>Name
+        <input id="quickName-${record.id}" value="${escapeHTML(displayName)}" placeholder="김OO" />
+      </label>
+      <label>Min
+        <input id="quickDuration-${record.id}" value="${escapeHTML(duration || "")}" placeholder="60" />
+      </label>
+      <button class="small-button" data-action="save-calendar-record" data-kind="${escapeHTML(kind)}" data-id="${escapeHTML(record.id)}">Save</button>
+    </div>
   `;
 }
 
@@ -2836,6 +2945,9 @@ function attachEvents() {
       const patient = selectedCalendarKind === "visit" ? getVisitPatient(record || {}) : record ? getAppointmentPatient(record) : null;
       if (patient) selectedPatientId = patient.id;
       render();
+    }
+    if (action === "save-calendar-record") {
+      saveCalendarRecordQuickEdit(target.dataset.kind || selectedCalendarKind, id);
     }
     if (action === "select-schedule") {
       selectedScheduleId = id;
@@ -3839,7 +3951,6 @@ function processImportLane(laneKey, options = {}) {
       : [];
 
     state.rawInbox = [
-      ...candidates,
       ...importNotes,
       ...state.rawInbox.filter((item) => {
         return !(
@@ -3848,15 +3959,25 @@ function processImportLane(laneKey, options = {}) {
         );
       }),
     ];
-    dashboardWeekStart = getWeekStartISO(lane.date);
+    const imported = candidates.map(importScheduleCandidate);
+    const firstImported = imported[0]?.item;
+    const reviewCount = imported.filter((entry) => entry.needsReview).length;
+    if (firstImported) {
+      selectedCalendarKind = imported[0].kind;
+      selectedScheduleId = firstImported.id;
+      if (imported[0].kind === "visit") selectedVisitId = firstImported.id;
+      dashboardWeekStart = getWeekStartISO(firstImported.date || lane.date);
+    } else {
+      dashboardWeekStart = getWeekStartISO(lane.date);
+    }
     lane.text = "";
     lane.imageName = "";
     lane.imagePreview = "";
     lane.screenshotCount = 0;
     lane.ocrStatus = "";
     saveState();
-    toast(`${lane.title}: Visit/Appointment 후보 ${candidates.length}개를 Inbox에 만들었습니다.`);
-    if (currentView !== "inbox") setView("inbox");
+    toast(`${lane.title}: ${candidates.length}개를 스케줄러에 바로 반영했습니다${reviewCount ? ` · ${reviewCount}개 확인 필요` : ""}.`);
+    if (currentView !== "dashboard") setView("dashboard");
     else render();
     return;
   }

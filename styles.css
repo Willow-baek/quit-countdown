@@ -1395,6 +1395,36 @@ select:focus {
   gap: 9px;
 }
 
+.quick-record-edit {
+  display: grid;
+  grid-template-columns: 74px minmax(0, 1fr) 58px auto;
+  gap: 6px;
+  align-items: end;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #faf9f7;
+  padding: 8px;
+}
+
+.quick-record-edit label {
+  display: grid;
+  gap: 3px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.quick-record-edit input {
+  min-width: 0;
+  padding: 6px 7px;
+  font-size: 12px;
+}
+
+.quick-record-edit .small-button {
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
 .dashboard-side .patient-brief {
   grid-template-columns: 1fr;
 }
