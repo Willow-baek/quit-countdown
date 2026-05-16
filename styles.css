@@ -20,7 +20,6 @@
   --sidebar-hover-width: 180px;
   --sidebar-expanded-width: 320px;
   --calendar-row-height: 76px;
-  --dashboard-schedule-width: clamp(760px, 54vw, 860px);
 }
 
 * {
@@ -1057,7 +1056,7 @@ select:focus {
 
 .dashboard-layout {
   display: grid;
-  grid-template-columns: minmax(720px, var(--dashboard-schedule-width)) minmax(300px, 1fr);
+  grid-template-columns: minmax(760px, 65fr) minmax(320px, 35fr);
   gap: 14px;
   align-items: start;
 }
