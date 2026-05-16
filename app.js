@@ -719,6 +719,7 @@ function parseSmartCrmScheduleCandidate(segment, date, therapistName, sourceFile
   if (!time) return null;
   if (/예약\s*취소|예약취소|\[?\s*상태\s*[:：]?\s*취소|취소/.test(segment.text)) return null;
 
+  const explicitDate = extractScheduleLineDate(segment.text);
   const patientName = inferSmartCrmPatientName(segment.text, therapistName);
   const treatment = extractSmartCrmTreatment(segment.text);
   const reviewReasons = [];
@@ -731,7 +732,7 @@ function parseSmartCrmScheduleCandidate(segment, date, therapistName, sourceFile
     targetRecordType,
     fileName: "schedule candidate",
     createdAt: new Date().toISOString(),
-    recordedDate: date,
+    recordedDate: explicitDate || date,
     recordedTime: time,
     patientHint: patientName,
     durationMinutes: treatment.minutes || "",
@@ -741,6 +742,15 @@ function parseSmartCrmScheduleCandidate(segment, date, therapistName, sourceFile
     needsReview: reviewReasons.length > 0,
     reviewReason: reviewReasons.join(", "),
   };
+}
+
+function extractScheduleLineDate(text) {
+  const raw = String(text || "");
+  const isoMatch = raw.match(/\b(\d{4}-\d{1,2}-\d{1,2})\b/);
+  if (isoMatch) return normalizeDateText(isoMatch[1]);
+  const dottedMatch = raw.match(/\b(\d{4})[.\/년\s-]+(\d{1,2})[.\/월\s-]+(\d{1,2})\b/);
+  if (dottedMatch) return normalizeDateText(`${dottedMatch[1]}-${dottedMatch[2]}-${dottedMatch[3]}`);
+  return "";
 }
 
 function scheduleCandidateToItem(candidate) {
