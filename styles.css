@@ -20,6 +20,7 @@
   --sidebar-hover-width: 180px;
   --sidebar-expanded-width: 320px;
   --calendar-row-height: 76px;
+  --dashboard-schedule-width: clamp(760px, 54vw, 860px);
 }
 
 * {
@@ -1056,7 +1057,7 @@ select:focus {
 
 .dashboard-layout {
   display: grid;
-  grid-template-columns: minmax(0, 2.4fr) minmax(340px, 1.6fr);
+  grid-template-columns: minmax(720px, var(--dashboard-schedule-width)) minmax(300px, 1fr);
   gap: 14px;
   align-items: start;
 }
@@ -1064,6 +1065,7 @@ select:focus {
 .dashboard-side {
   display: grid;
   gap: 10px;
+  min-width: 0;
   align-self: start;
   max-height: calc(100vh - 126px);
   overflow: auto;
@@ -1352,7 +1354,7 @@ select:focus {
 /* ===== APPOINTMENTS ===== */
 
 .appointment-button {
-  width: 80%;
+  width: 100%;
   display: flex;
   align-items: flex-start;
   border: 1px solid var(--line);
