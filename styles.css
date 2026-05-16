@@ -1343,10 +1343,8 @@ select:focus {
 
 .appointment-button {
   width: 100%;
-  display: grid;
-  align-content: start;
-  gap: 2px;
-  grid-template-rows: auto auto;
+  display: flex;
+  align-items: flex-start;
   border: 1px solid var(--line);
   border-left: 4px solid var(--accent);
   border-radius: 8px;
@@ -1354,7 +1352,7 @@ select:focus {
   color: var(--ink);
   height: max(42px, calc((var(--duration-slots, 1) * var(--calendar-row-height)) - 10px));
   margin-top: calc(var(--start-offset-slots, 0) * var(--calendar-row-height));
-  padding: 7px 8px;
+  padding: 7px 8px 6px;
   position: relative;
   z-index: 3;
   text-align: left;
@@ -1429,9 +1427,10 @@ select:focus {
 .appointment-title {
   display: flex;
   align-items: baseline;
-  gap: 5px;
+  gap: 6px;
   overflow: hidden;
   white-space: nowrap;
+  width: 100%;
 }
 
 .appointment-time {
@@ -1455,12 +1454,13 @@ select:focus {
 }
 
 .appointment-duration {
-  display: block;
+  display: inline-block;
   color: var(--muted);
   font-size: 11px;
   font-weight: 700;
   line-height: 1.25;
   white-space: nowrap;
+  flex: 0 0 auto;
 }
 
 /* ===== HISTORY PANEL ===== */

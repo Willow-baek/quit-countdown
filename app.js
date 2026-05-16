@@ -2187,8 +2187,8 @@ function renderCalendarRecord(item, kind) {
       <span class="appointment-title">
         <span class="appointment-time">${escapeHTML(item.time)}</span>
         <span class="appointment-name">${escapeHTML(name)}</span>
+        <small class="appointment-duration">${escapeHTML(durationLabel ? `${durationLabel}분` : "시간 ?")}</small>
       </span>
-      <small class="appointment-duration">${escapeHTML(durationLabel ? `${durationLabel}분` : "시간 ?")}</small>
     </button>
   `;
 }
