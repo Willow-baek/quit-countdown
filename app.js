@@ -1218,31 +1218,11 @@ function linkTranscriptToVisit(inboxId, visitId) {
   const visit = state.visits.find((entry) => entry.id === visitId);
   if (!inbox || !visit) return;
 
-  const text = inbox.correctedText || inbox.text || inbox.ocrText || "";
-  const patient = getVisitPatient(visit) || { name: visit.patientNameText || inbox.patientHint || "환자 확인", code: "" };
-  const transcriptIds = new Set(visit.transcriptInboxIds || []);
-  transcriptIds.add(inbox.id);
-
-  visit.sourceInboxId = visit.sourceInboxId || inbox.id;
-  visit.transcriptInboxIds = [...transcriptIds];
-  visit.transcript = [visit.transcript, text].filter(Boolean).join("\n\n");
-  if (!visit.summary || /기록 대기|summary 없음/.test(visit.summary)) visit.summary = summarizeTranscript(text);
-  if (!visit.signals?.length) visit.signals = extractSignals(text).signals;
-  if (!visit.secondarySignals?.length) visit.secondarySignals = extractSignals(text).secondary;
-  if (!visit.tracking?.length) visit.tracking = inferTracking(text);
-  if (!visit.treatment) visit.treatment = extractSection(text, ["오늘", "치료", "진행"]);
-  if (!visit.hep) visit.hep = extractSection(text, ["HEP", "숙제", "운동"]);
-  if (!visit.homework) visit.homework = extractSection(text, ["숙제", "HEP", "다음"]);
-  if (!visit.nextFocus) visit.nextFocus = extractSection(text, ["다음", "확인", "progression"]);
-  if (!visit.draft) visit.draft = generateDraft(visit, patient);
-  visit.matchStatus = "confirmed";
-
-  inbox.status = "matched";
-  inbox.matchedVisitId = visit.id;
-  inbox.visitId = visit.id;
-  inbox.patientId = visit.patientId || null;
-  inbox.matchStatus = "confirmed";
-  if (inbox.cloudId) updateSupabaseInboxStatus(inbox.cloudId, "matched");
+  const linked = applyTranscriptToVisit(visit, inbox);
+  if (!linked) {
+    toast("Transcript 내용이 비어 있어 연결하지 못했습니다.");
+    return;
+  }
 
   selectedCalendarKind = "visit";
   selectedScheduleId = visit.id;
@@ -1252,6 +1232,73 @@ function linkTranscriptToVisit(inboxId, visitId) {
   toast("Transcript를 Visit에 연결했습니다.");
   render();
 }
+
+function getInboxTranscriptText(inbox) {
+  return (inbox?.correctedText || inbox?.text || inbox?.ocrText || "").trim();
+}
+
+function applyTranscriptToVisit(visit, inbox) {
+  const text = getInboxTranscriptText(inbox);
+  if (!text) {
+    inbox.needsReview = true;
+    inbox.reviewReason = "Transcript 내용 없음";
+    return false;
+  }
+
+  const patient = getVisitPatient(visit) || { name: visit.patientNameText || inbox.patientHint || "환자 확인", code: "" };
+  const transcriptIds = new Set(visit.transcriptInboxIds || []);
+  const wasAlreadyLinked = transcriptIds.has(inbox.id);
+  transcriptIds.add(inbox.id);
+
+  visit.sourceInboxId = visit.sourceInboxId || inbox.id;
+  visit.transcriptInboxIds = [...transcriptIds];
+  if (!wasAlreadyLinked) visit.transcript = [visit.transcript, text].filter(Boolean).join("\n\n");
+  if (!visit.summary || /기록 대기|summary 없음|치료 기록 대기/.test(visit.summary)) visit.summary = summarizeTranscript(text);
+  if (!visit.signals?.length) visit.signals = extractSignals(text).signals;
+  if (!visit.secondarySignals?.length) visit.secondarySignals = extractSignals(text).secondary;
+  if (!visit.tracking?.length) visit.tracking = inferTracking(text);
+  if (!visit.treatment) visit.treatment = extractSection(text, ["오늘", "치료", "진행"]);
+  if (!visit.hep) visit.hep = extractSection(text, ["HEP", "숙제", "운동"]);
+  if (!visit.homework) visit.homework = extractSection(text, ["숙제", "HEP", "다음"]);
+  if (!visit.nextFocus) visit.nextFocus = extractSection(text, ["다음", "확인", "progression"]);
+  if (!visit.draft || /Follow-up status checked|Initial interview completed|치료 기록 대기|no structured tracking update captured/i.test(visit.draft)) {
+    visit.draft = generateDraft(visit, patient);
+  }
+  visit.matchStatus = "confirmed";
+
+  inbox.status = "matched";
+  inbox.matchedVisitId = visit.id;
+  inbox.visitId = visit.id;
+  inbox.patientId = visit.patientId || null;
+  inbox.matchStatus = "confirmed";
+  if (inbox.cloudId) updateSupabaseInboxStatus(inbox.cloudId, "matched");
+  return true;
+}
+
+function shouldAutoLinkTranscriptMatch(match) {
+  return Boolean(match?.kind === "visit" && match.item && match.score >= 70 && match.delta <= 20);
+}
+
+function autoLinkTranscriptInboxItem(inbox) {
+  if (!inbox || inbox.type !== "transcript" || inbox.status !== "new") return false;
+  if (!getInboxTranscriptText(inbox)) {
+    inbox.needsReview = true;
+    inbox.reviewReason = "Transcript 내용 없음";
+    return false;
+  }
+  const match = findBestVisitForInbox(inbox);
+  if (!shouldAutoLinkTranscriptMatch(match)) return false;
+  return applyTranscriptToVisit(match.item, inbox);
+}
+
+function autoLinkPendingTranscripts() {
+  return state.rawInbox
+    .filter((item) => item.type === "transcript" && item.status === "new")
+    .reduce((count, item) => count + (autoLinkTranscriptInboxItem(item) ? 1 : 0), 0);
+}
+
+const startupLinkedTranscripts = autoLinkPendingTranscripts();
+if (startupLinkedTranscripts) saveState({ skipAutoSync: true });
 
 function findBestVisitForChartCleanup(item) {
   const sameDate = state.visits.filter((visit) => visit.date === item.recordedDate);
@@ -4077,6 +4124,7 @@ function processImportLane(laneKey, options = {}) {
     ];
     clearPreviousScheduleImportRecords(sourceFile);
     const imported = candidates.map(importScheduleCandidate);
+    const linkedTranscripts = autoLinkPendingTranscripts();
     const firstImported = imported[0]?.item;
     const reviewCount = imported.filter((entry) => entry.needsReview).length;
     if (firstImported) {
@@ -4093,7 +4141,11 @@ function processImportLane(laneKey, options = {}) {
     lane.screenshotCount = 0;
     lane.ocrStatus = "";
     saveState();
-    toast(`${lane.title}: ${candidates.length}개를 스케줄러에 바로 반영했습니다${reviewCount ? ` · ${reviewCount}개 확인 필요` : ""}.`);
+    toast(
+      `${lane.title}: ${candidates.length}개를 스케줄러에 바로 반영했습니다${reviewCount ? ` · ${reviewCount}개 확인 필요` : ""}${
+        linkedTranscripts ? ` · transcript ${linkedTranscripts}개 자동 연결` : ""
+      }.`,
+    );
     if (currentView !== "dashboard") setView("dashboard");
     else render();
     return;
@@ -4162,10 +4214,12 @@ async function handleTranscriptForm(form) {
     toast("전사 텍스트가 필요합니다.");
     return;
   }
-  state.rawInbox.unshift(parseTranscriptMeta(text, fileName, date, time));
+  const item = parseTranscriptMeta(text, fileName, date, time);
+  state.rawInbox.unshift(item);
+  const linked = autoLinkTranscriptInboxItem(item);
   saveState();
   form.reset();
-  toast("Transcript를 Inbox에 추가했습니다.");
+  toast(linked ? "Transcript를 기존 Visit에 자동 연결했습니다." : "Transcript를 Inbox에 추가했습니다.");
   render();
 }
 
@@ -4481,17 +4535,20 @@ async function importSupabaseInbox(options = {}) {
     if (!Array.isArray(rows)) return;
 
     let added = 0;
+    let linked = 0;
     rows.reverse().forEach((row) => {
       const exists = state.rawInbox.some((entry) => entry.cloudId === row.id || entry.localId === row.local_id);
       if (exists) return;
-      state.rawInbox.unshift(mapCloudInboxRow(row));
+      const item = mapCloudInboxRow(row);
+      state.rawInbox.unshift(item);
+      if (autoLinkTranscriptInboxItem(item)) linked += 1;
       added += 1;
     });
 
     if (added > 0) {
       saveState();
       render();
-      if (!silent) toast(`클라우드 Inbox ${added}개를 가져왔습니다.`);
+      if (!silent) toast(`클라우드 Inbox ${added}개를 가져왔습니다${linked ? ` · ${linked}개 자동 연결` : ""}.`);
     } else if (!silent) {
       toast("새 클라우드 Inbox가 없습니다.");
     }
