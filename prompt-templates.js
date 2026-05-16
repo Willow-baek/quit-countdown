@@ -6,10 +6,12 @@ window.CMA_PROMPT_TEMPLATES = {
     expectedOutputFormat: `[VISITS]
 2026-05-16 09:00 김바보 40
 2026-05-16 09:50 뉴진스 60
+2026-05-16 17:00 안나나 30
 
 [APPOINTMENTS]
 2026-05-19 09:30 조아람 30
-2026-05-19 10:00 정은비 30`,
+2026-05-19 10:00 정은비 30
+2026-05-19 11:00 백다솔 40`,
     sectionHeaders: ["VISITS", "APPOINTMENTS"],
     promptText: `아래 병원 주간 예약표 이미지 또는 OCR 텍스트를 분석해서, 현재 workflow에 필요한 최소 정보만 정리해 주세요.
 
