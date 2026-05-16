@@ -1989,10 +1989,13 @@ function renderCalendarRecord(item, kind) {
     kind === "visit"
       ? item.transcript ? "transcript 연결" : "차트 대기"
       : item.matchedVisitId ? "Visit 연결됨" : "예정";
+  const patientCode = patient?.code || patient?.chartNumber || item.patientCode || item.visitType || "";
+  const tooltip = `${item.time} ${name}\n${typeLabel}${durationLabel ? ` · ${durationLabel}분` : ""}${patientCode ? ` · ${patientCode}` : ""}\n${statusLabel}`;
   return `
-    <button class="appointment-button ${kind === "visit" ? "visit-record" : "appointment-record"} ${item.id === selectedScheduleId && selectedCalendarKind === kind ? "selected" : ""} ${item.visitType === "초진" ? "initial" : "followup"} ${durationClass}" data-action="select-calendar-record" data-kind="${kind}" data-id="${item.id}">
-      <span>${escapeHTML(item.time)} · ${escapeHTML(name)}</span>
-      <small>${escapeHTML(typeLabel)} · ${escapeHTML(durationLabel ? `${durationLabel}분` : statusLabel)} · ${escapeHTML(patient?.code || patient?.chartNumber || item.patientCode || item.visitType || "")}</small>
+    <button class="appointment-button ${kind === "visit" ? "visit-record" : "appointment-record"} ${item.id === selectedScheduleId && selectedCalendarKind === kind ? "selected" : ""} ${item.visitType === "초진" ? "initial" : "followup"} ${durationClass}" data-action="select-calendar-record" data-kind="${kind}" data-id="${item.id}" title="${escapeHTML(tooltip)}">
+      <span class="appointment-time">${escapeHTML(item.time)}</span>
+      <span class="appointment-name">${escapeHTML(name)}</span>
+      <small class="appointment-duration">${escapeHTML(durationLabel ? `${durationLabel}분` : "시간 ?")}</small>
     </button>
   `;
 }

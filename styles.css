@@ -1291,6 +1291,7 @@ select:focus {
   width: 100%;
   display: grid;
   gap: 2px;
+  grid-template-rows: auto auto auto;
   border: 1px solid var(--line);
   border-left: 4px solid var(--accent);
   border-radius: 8px;
@@ -1349,16 +1350,38 @@ select:focus {
   min-height: 0;
 }
 
-.appointment-button span {
-  font-size: 13px;
-  font-weight: 700;
-  line-height: 1.25;
+.appointment-time,
+.appointment-name,
+.appointment-duration {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
 }
 
-.appointment-button small {
+.appointment-time {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 1.15;
+  white-space: nowrap;
+}
+
+.appointment-name {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.appointment-duration {
   color: var(--muted);
   font-size: 11px;
+  font-weight: 700;
   line-height: 1.25;
+  white-space: nowrap;
 }
 
 /* ===== HISTORY PANEL ===== */
