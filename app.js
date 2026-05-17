@@ -146,6 +146,8 @@ let importLanes = {
 };
 let gptWindow = null;
 let isGptOpen = false;
+let isChatGPTBridgeReady = document.documentElement.dataset.clinicalMemoryBridge === "ready";
+let chatGPTBridgeRequestCounter = 0;
 let learningDraft = {
   from: "",
   to: "",
@@ -153,6 +155,17 @@ let learningDraft = {
   category: "movement",
   fieldId: "",
 };
+
+window.addEventListener("message", handleChatGPTBridgeMessage);
+
+function handleChatGPTBridgeMessage(event) {
+  if (event.source !== window) return;
+  const data = event.data;
+  if (!data || data.source !== "clinical-memory-bridge") return;
+  if (data.type === "BRIDGE_READY") {
+    isChatGPTBridgeReady = true;
+  }
+}
 
 function makeImportLane(key) {
   const defaults = {
@@ -3355,16 +3368,22 @@ async function copyExternalPrompt(promptId) {
   }
 }
 
-function openChatGPTWindow() {
+async function openChatGPTWindow() {
   const layout = getAIWorkspaceLayout();
   setChatGPTWorkflowOpen(true);
   fitAppWindowBesideChatGPT(layout.app);
+
+  const bridgeResult = await requestChatGPTBridge("OPEN_OR_FOCUS_CHATGPT", { layout });
+  if (bridgeResult) {
+    handleChatGPTBridgeResult(bridgeResult, { openedMessage: "ChatGPT 창을 열었습니다." });
+    return;
+  }
+
   if (isGptOpen) {
     focusGPTWindow();
     toast("ChatGPT 창 앞으로 가져오기를 시도했습니다.");
     return;
   }
-
   openChatGPTPopup(layout);
 }
 
@@ -3424,6 +3443,65 @@ function openChatGPTPopup(layout = getAIWorkspaceLayout()) {
   return gptWindow;
 }
 
+function isChatGPTBridgeAvailable() {
+  return isChatGPTBridgeReady || document.documentElement.dataset.clinicalMemoryBridge === "ready";
+}
+
+function requestChatGPTBridge(action, payload = {}) {
+  if (!isChatGPTBridgeAvailable()) return Promise.resolve(null);
+
+  const requestId = `chatgpt_bridge_${Date.now()}_${++chatGPTBridgeRequestCounter}`;
+  return new Promise((resolve) => {
+    const timeout = window.setTimeout(() => {
+      window.removeEventListener("message", handleResponse);
+      resolve(null);
+    }, 1200);
+
+    function handleResponse(event) {
+      if (event.source !== window) return;
+      const data = event.data;
+      if (!data || data.source !== "clinical-memory-bridge") return;
+      if (data.type !== "CHATGPT_BRIDGE_RESPONSE" || data.requestId !== requestId) return;
+
+      window.clearTimeout(timeout);
+      window.removeEventListener("message", handleResponse);
+      resolve(data);
+    }
+
+    window.addEventListener("message", handleResponse);
+    window.postMessage(
+      {
+        source: "clinical-memory-assistant",
+        type: "CHATGPT_BRIDGE_REQUEST",
+        requestId,
+        action,
+        payload,
+      },
+      "*"
+    );
+  });
+}
+
+function handleChatGPTBridgeResult(result, messages = {}) {
+  const status = result.response?.status;
+  if (result.ok && status === "focused") {
+    isGptOpen = true;
+    toast(messages.focusedMessage || "기존 ChatGPT 창을 앞으로 가져왔습니다.");
+    return true;
+  }
+  if (result.ok && status === "opened") {
+    isGptOpen = true;
+    toast(messages.openedMessage || "ChatGPT 창을 열었습니다.");
+    return true;
+  }
+  if (result.ok && status === "not_found") {
+    isGptOpen = false;
+    return false;
+  }
+  toast(result.error || result.response?.error || "Clinical Memory Bridge 요청에 실패했습니다.");
+  return true;
+}
+
 function focusGPTWindow() {
   if (!gptWindow) return false;
   try {
@@ -3434,13 +3512,22 @@ function focusGPTWindow() {
   }
 }
 
-function handleFocusChatGPTWindow() {
+async function handleFocusChatGPTWindow() {
+  const bridgeResult = await requestChatGPTBridge("FOCUS_CHATGPT", { layout: getAIWorkspaceLayout() });
+  if (bridgeResult) {
+    if (handleChatGPTBridgeResult(bridgeResult)) return;
+
+    if (window.confirm("열려 있는 ChatGPT 창을 찾지 못했어요. 새로 열까요?")) {
+      await openChatGPTWindow();
+    }
+    return;
+  }
+
   if (isGptOpen) {
     focusGPTWindow();
     toast("ChatGPT 창 앞으로 가져오기를 시도했습니다.");
     return;
   }
-
   if (window.confirm("ChatGPT 창이 닫혀 있어요. 다시 열까요?")) {
     gptWindow = null;
     isGptOpen = false;
