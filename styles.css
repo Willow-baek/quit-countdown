@@ -56,7 +56,8 @@ button {
   transition: grid-template-columns 0.3s ease;
 }
 
-body.sidebar-open .app-shell {
+body.sidebar-open .app-shell,
+.app-shell:has(.sidebar:hover) {
   grid-template-columns: var(--sidebar-open-width) minmax(0, 1fr);
 }
 
@@ -80,7 +81,8 @@ body.chatgpt-workflow-open .app-shell {
   transition: width 0.2s ease, padding 0.2s ease;
 }
 
-body.sidebar-open .sidebar {
+body.sidebar-open .sidebar,
+.sidebar:hover {
   width: var(--sidebar-open-width);
   padding: 10px 8px;
 }
@@ -146,7 +148,8 @@ body.chatgpt-workflow-open .sidebar-compact {
   transition: max-width 0.25s ease, opacity 0.2s ease, margin-left 0.25s ease;
 }
 
-body.sidebar-open .sidebar-app-title {
+body.sidebar-open .sidebar-app-title,
+.sidebar:hover .sidebar-app-title {
   max-width: 150px;
   opacity: 1;
   margin-left: 10px;
@@ -196,7 +199,8 @@ body.sidebar-open .sidebar-app-title {
   transition: max-width 0.2s ease, opacity 0.15s ease, margin-left 0.2s ease;
 }
 
-body.sidebar-open .sync-status-row > div {
+body.sidebar-open .sync-status-row > div,
+.sidebar:hover .sync-status-row > div {
   max-width: 140px;
   opacity: 1;
   margin-left: 6px;
@@ -294,14 +298,18 @@ body.sidebar-open .sync-status-row > div {
 }
 
 body.sidebar-open .nav-item,
-body.sidebar-open .sidebar-action {
+body.sidebar-open .sidebar-action,
+.sidebar:hover .nav-item,
+.sidebar:hover .sidebar-action {
   justify-content: flex-start;
   padding: 0 10px;
   gap: 10px;
 }
 
 body.sidebar-open .nav-item span,
-body.sidebar-open .sidebar-action span {
+body.sidebar-open .sidebar-action span,
+.sidebar:hover .nav-item span,
+.sidebar:hover .sidebar-action span {
   width: 140px;
   opacity: 1;
 }
