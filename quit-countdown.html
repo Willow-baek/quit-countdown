@@ -921,6 +921,12 @@ function isHolidayDate(d) {
   if (!cfg?.useHoliday || country === 'none') return false;
   return (HOLIDAYS_2026[country] || HOLIDAYS_2026.none).has(dateKey(d));
 }
+function normalizeOffDows(offDows, savedLang) {
+  if (savedLang === 'ko' && Array.isArray(offDows) && offDows.length === 2 && offDows.includes(0) && offDows.includes(4)) {
+    return [0, 6];
+  }
+  return Array.isArray(offDows) ? offDows : [0, 6];
+}
 
 function isBaseWorkDay(d) {
   if (cfg.offDows.includes(d.getDay())) return false;
@@ -969,7 +975,7 @@ function loadData() {
       name: c.name,
       lastDay: keyToDate(c.lastDayKey),
       paidDaysRemaining: Number.isFinite(Number(c.paidDaysRemaining)) ? Math.max(0, Math.floor(Number(c.paidDaysRemaining))) : 0,
-      offDows: c.offDows,
+      offDows: normalizeOffDows(c.offDows, lang),
       holidayCountry: c.holidayCountry || 'kr',
       useHoliday: c.useHoliday
     };
