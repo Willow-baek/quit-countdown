@@ -1,4 +1,4 @@
-const CACHE_NAME = 'quit-countdown-v3';
+const CACHE_NAME = 'quit-countdown-v4';
 const CORE_ASSETS = [
   './',
   './index.html',

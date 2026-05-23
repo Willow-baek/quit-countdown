@@ -1103,7 +1103,7 @@ function buildSetupUI() {
   // 요일 버튼
   const grid = document.getElementById('dow-grid');
   grid.innerHTML = '';
-  const defaults = new Set(lang === 'ko' ? [0,4] : [0,6]);
+  const defaults = new Set([0,6]);
   t.dowLabels.forEach((label, i) => {
     const btn = document.createElement('button');
     btn.className = 'dow-btn' + (defaults.has(i) ? ' selected' : '');
