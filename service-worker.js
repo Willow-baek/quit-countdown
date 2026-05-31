@@ -1,7 +1,7 @@
-const CACHE_NAME = 'quit-countdown-v5';
+const CACHE_NAME = 'quit-countdown-v6-separated';
 const CORE_ASSETS = [
   './',
-  './index.html',
+  './index.html?v=quit-20260531',
   './quit-countdown.html',
   './manifest.json',
   './icons/quit-icon.svg'
@@ -36,10 +36,10 @@ self.addEventListener('fetch', (event) => {
       fetch(event.request)
         .then((response) => {
           const copy = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put('./index.html', copy));
+          caches.open(CACHE_NAME).then((cache) => cache.put('./index.html?v=quit-20260531', copy));
           return response;
         })
-        .catch(() => caches.match('./index.html'))
+        .catch(() => caches.match('./index.html?v=quit-20260531').then((cached) => cached || caches.match('./index.html')))
     );
     return;
   }

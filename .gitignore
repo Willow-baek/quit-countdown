@@ -2,23 +2,6 @@
 *.swp
 .env
 .env.*
-!.env.example
-config.local.js
-watcher.local.json
-.watcher-state.json
-
-# Patient or clinic data exports
-exports/
-patient-data/
-screenshots/
-recordings/
-transcripts/
-*.local.json
-clinical-memory-*.json
-
-# Dependency/build folders for future app versions
 node_modules/
 dist/
 build/
-.vite/
-.next/

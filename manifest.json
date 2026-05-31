@@ -1,9 +1,10 @@
 {
   "name": "QUIT.",
   "short_name": "QUIT.",
+  "id": "/quit-countdown/",
   "description": "Countdown to freedom.",
-  "start_url": "./",
-  "scope": "./",
+  "start_url": "/quit-countdown/?v=quit-20260531",
+  "scope": "/quit-countdown/",
   "display": "standalone",
   "background_color": "#0e0e0e",
   "theme_color": "#0e0e0e",
